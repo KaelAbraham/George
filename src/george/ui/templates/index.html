@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>George - AI Assistant for Authors</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .nav-bar {
+            background: rgba(0,0,0,0.1);
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .nav-bar a {
+            color: white;
+            text-decoration: none;
+            margin: 0 15px;
+            padding: 8px 16px;
+            border-radius: 5px;
+            transition: background 0.3s;
+        }
+        .nav-bar a:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        .nav-bar .logo {
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+        .main-content {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            text-align: center;
+            max-width: 500px;
+            width: 90%;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.2em;
+        }
+        .description {
+            color: #555;
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+        .btn {
+            display: inline-block;
+            padding: 15px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-size: 1.1em;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        .features {
+            margin-top: 40px;
+            text-align: left;
+        }
+        .feature {
+            margin-bottom: 15px;
+            padding-left: 25px;
+            position: relative;
+        }
+        .feature:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #28a745;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="nav-bar">
+        <div class="logo">🤖 George AI</div>
+        <div>
+            <a href="/" style="background: rgba(255,255,255,0.2);">Home</a>
+            <a href="/upload">Upload</a>
+            <a href="/chat">Chat</a>
+        </div>
+    </div>
+    
+    <div class="main-content">
+        <div class="container">
+        <h1>George</h1>
+        <div class="subtitle">AI Assistant for Authors & World-builders</div>
+        <div class="description">
+            Upload your manuscript and let George help you extract characters, places, and organizations. 
+            Build a comprehensive knowledge base and chat with an AI that knows your story inside and out.
+        </div>
+        
+        <a href="{{ url_for('upload') }}" class="btn">Get Started</a>
+        
+        <div class="features">
+            <div class="feature">Extract entities from your manuscripts</div>
+            <div class="feature">Build interactive knowledge bases</div>
+            <div class="feature">Chat with AI about your story</div>
+            <div class="feature">100% local and private</div>
+        </div>
+        
+        <div style="margin-top: 30px;">
+            <a href="{{ url_for('chat') }}" style="color: white; text-decoration: none; opacity: 0.8;">
+                Already have a file? Go to Chat →
+            </a>
+        </div>
+    </div>
+    </div>
+</body>
+</html>

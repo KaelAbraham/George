@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat with George - AI Writing Assistant</title>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            margin: 0; 
+            padding: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .nav-bar {
+            background: rgba(0,0,0,0.1);
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .nav-bar a {
+            color: white;
+            text-decoration: none;
+            margin: 0 15px;
+            padding: 8px 16px;
+            border-radius: 5px;
+            transition: background 0.3s;
+        }
+        .nav-bar a:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        .nav-bar .logo {
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+        #chat-container { 
+            max-width: 900px; 
+            height: 75vh; 
+            margin: 20px auto;
+            display: flex; 
+            flex-direction: column; 
+            background: white; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2); 
+            border-radius: 15px; 
+            overflow: hidden;
+        }
+        #chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        #chat-header h1 {
+            margin: 0;
+            font-size: 1.5em;
+        }
+        #ai-status {
+            font-size: 0.9em;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+        #messages { 
+            flex: 1; 
+            padding: 20px; 
+            overflow-y: auto; 
+            background: #f8f9fa;
+        }
+        .message { 
+            margin-bottom: 20px; 
+            display: flex;
+            align-items: flex-start;
+        }
+        .user-message { 
+            justify-content: flex-end; 
+        }
+        .ai-message {
+            justify-content: flex-start;
+        }
+        .message .content { 
+            max-width: 70%; 
+            padding: 12px 16px; 
+            border-radius: 18px; 
+            line-height: 1.4;
+            position: relative;
+        }
+        .user-message .content { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .ai-message .content { 
+            background: white;
+            border: 2px solid #e9ecef;
+            color: #333;
+        }
+        .message .avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            margin: 0 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        .user-message .avatar {
+            background: #495057;
+            color: white;
+        }
+        .ai-message .avatar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        #chat-form { 
+            display: flex; 
+            padding: 20px; 
+            background: white;
+            border-top: 1px solid #e9ecef;
+        }
+        #chat-input { 
+            flex: 1; 
+            padding: 12px 16px; 
+            border: 2px solid #e9ecef; 
+            border-radius: 25px; 
+            outline: none;
+            font-size: 14px;
+        }
+        #chat-input:focus {
+            border-color: #667eea;
+        }
+        #send-btn { 
+            padding: 12px 20px; 
+            margin-left: 10px; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; 
+            border: none; 
+            border-radius: 25px; 
+            cursor: pointer;
+            font-weight: bold;
+            transition: transform 0.2s;
+        }
+        #send-btn:hover {
+            transform: translateY(-1px);
+        }
+        #send-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .thinking { 
+            color: #6c757d; 
+            font-style: italic; 
+            padding: 10px 0;
+        }
+        .typing-indicator {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .typing-indicator span {
+            height: 8px;
+            width: 8px;
+            background: #667eea;
+            border-radius: 50%;
+            display: inline-block;
+            animation: typing 1.4s infinite ease-in-out;
+        }
+        .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
+        .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes typing {
+            0%, 80%, 100% { transform: scale(0); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+        .error {
+            color: #dc3545;
+            background-color: #f8d7da !important;
+            border-color: #f5c6cb !important;
+        }
+        .model-info {
+            font-size: 0.8em;
+            color: #6c757d;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="nav-bar">
+    <div class="logo">🤖 George AI</div>
+    <div>
+        <a href="/">Home</a>
+        <a href="/upload">Upload</a>
+        <a href="/chat" style="background: rgba(255,255,255,0.2);">Chat</a>
+    </div>
+</div>
+
+<div id="chat-container">
+    <div id="chat-header">
+        <h1>🤖 George AI Assistant</h1>
+        <div id="ai-status">
+            <span id="status-indicator">Connecting to AI...</span>
+            <div class="model-info" id="model-info"></div>
+        </div>
+                <div id="file-status" style="margin-bottom: 10px; padding: 10px; background: rgba(255,255,255,0.1); border-radius: 5px;">
+            <span id="file-indicator">📄 Checking file status...</span>
+            <button id="clear-file-btn" onclick="clearCurrentFile()" style="margin-left: 5px; padding: 4px 8px; background: rgba(255,0,0,0.2); border: 1px solid rgba(255,0,0,0.3); border-radius: 3px; color: white; cursor: pointer; font-size: 0.8em; display: none;">Clear File</button>
+            <button onclick="checkFileStatus()" style="margin-left: 5px; padding: 4px 8px; background: rgba(0,123,255,0.2); border: 1px solid rgba(0,123,255,0.3); border-radius: 3px; color: white; cursor: pointer; font-size: 0.8em;">Refresh Status</button>
+        </div>
+        <div id="processing-status" style="margin-bottom: 10px; padding: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; display: none;">
+            <span id="processing-indicator">⚙️ Processing manuscript...</span>
+            <div id="processing-progress" style="margin-top: 5px; font-size: 0.8em;"></div>
+        </div>
+    </div>
+    <div id="messages">
+        <div class="message ai-message">
+            <div class="avatar">🤖</div>
+            <div class="content">
+                Hello! I'm George, powered by Gemma 2B. I'm here to help you with your story, characters, world-building, and any writing questions you have. 
+                <br><br>
+                📁 <strong>Tip:</strong> Upload your manuscript using the "Upload File" button above to get personalized advice about your specific story!
+            </div>
+        </div>
+    </div>
+    <form id="chat-form">
+        <input type="text" id="chat-input" placeholder="Ask me about your story, characters, or writing..." autocomplete="off">
+        <button id="send-btn" type="submit">Send</button>
+    </form>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const chatForm = document.getElementById('chat-form');
+        const chatInput = document.getElementById('chat-input');
+        const sendBtn = document.getElementById('send-btn');
+        const messagesContainer = document.getElementById('messages');
+        const statusIndicator = document.getElementById('status-indicator');
+        const modelInfo = document.getElementById('model-info');
+
+        // Check AI status on load
+        checkAIStatus();
+        checkFileStatus();
+        checkProcessingStatus();
+        
+        // Poll processing status every 5 seconds
+        setInterval(checkProcessingStatus, 5000);
+
+        chatForm.addEventListener('submit', function(event) {
+            event.preventDefault();
+            const question = chatInput.value.trim();
+            if (!question) return;
+
+            // Display user's message
+            addMessage(question, 'user');
+            chatInput.value = '';
+            
+            // Disable input while processing
+            setLoading(true);
+            
+            // Show typing indicator
+            const typingId = addTypingIndicator();
+
+            // Send message to API
+            fetch('/api/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ message: question })
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Remove typing indicator
+                removeMessage(typingId);
+                
+                // Display AI response
+                if (data.response) {
+                    addMessage(data.response, 'ai', data.model);
+                } else {
+                    addMessage('Sorry, I didn\'t receive a proper response.', 'ai', null, true);
+                }
+                
+                setLoading(false);
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                removeMessage(typingId);
+                addMessage('Sorry, I encountered an error processing your request.', 'ai', null, true);
+                setLoading(false);
+            });
+        });
+
+        function checkAIStatus() {
+            fetch('/api/ai/status')
+            .then(response => response.json())
+            .then(data => {
+                if (data.available) {
+                    statusIndicator.textContent = '✅ Connected to ' + data.service;
+                    statusIndicator.style.color = '#28a745';
+                    modelInfo.textContent = 'Model: ' + data.model;
+                } else {
+                    statusIndicator.textContent = '❌ AI Service Unavailable';
+                    statusIndicator.style.color = '#dc3545';
+                    modelInfo.textContent = data.error || 'Please check Ollama service';
+                }
+            })
+            .catch(error => {
+                statusIndicator.textContent = '❌ Connection Error';
+                statusIndicator.style.color = '#dc3545';
+                modelInfo.textContent = 'Failed to check AI status';
+            });
+        }
+
+        function addMessage(content, sender, model = null, isError = false) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-message`;
+            messageDiv.id = 'msg-' + Date.now();
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'avatar';
+            avatar.textContent = sender === 'user' ? '👤' : '🤖';
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'content';
+            if (isError) contentDiv.className += ' error';
+            contentDiv.textContent = content;
+            
+            if (sender === 'user') {
+                messageDiv.appendChild(contentDiv);
+                messageDiv.appendChild(avatar);
+            } else {
+                messageDiv.appendChild(avatar);
+                messageDiv.appendChild(contentDiv);
+                
+                if (model) {
+                    const modelTag = document.createElement('div');
+                    modelTag.className = 'model-info';
+                    modelTag.textContent = `Generated by ${model}`;
+                    contentDiv.appendChild(modelTag);
+                }
+            }
+            
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            
+            return messageDiv.id;
+        }
+
+        function addTypingIndicator() {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message ai-message';
+            messageDiv.id = 'typing-' + Date.now();
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'avatar';
+            avatar.textContent = '🤖';
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'content';
+            contentDiv.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+            
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(contentDiv);
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            
+            return messageDiv.id;
+        }
+
+        function removeMessage(messageId) {
+            const element = document.getElementById(messageId);
+            if (element) {
+                element.remove();
+            }
+        }
+
+        function setLoading(loading) {
+            sendBtn.disabled = loading;
+            chatInput.disabled = loading;
+            if (loading) {
+                sendBtn.textContent = 'Sending...';
+            } else {
+                sendBtn.textContent = 'Send';
+            }
+        }
+
+        function checkFileStatus() {
+            fetch('/api/file/current')
+            .then(response => response.json())
+            .then(data => {
+                const fileIndicator = document.getElementById('file-indicator');
+                const clearBtn = document.getElementById('clear-file-btn');
+                
+                if (data.loaded) {
+                    const wordCount = data.info.word_count || 0;
+                    fileIndicator.innerHTML = `📄 <strong>${data.filename}</strong> (${wordCount} words)`;
+                    fileIndicator.style.color = '#90EE90';
+                    clearBtn.style.display = 'inline-block';
+                } else {
+                    fileIndicator.innerHTML = '📄 No file loaded - upload to get personalized advice!';
+                    fileIndicator.style.color = '#FFB6C1';
+                    clearBtn.style.display = 'none';
+                }
+            })
+            .catch(error => {
+                document.getElementById('file-indicator').textContent = '📄 Error checking file status';
+            });
+        }
+
+        function checkProcessingStatus() {
+            fetch('/api/processing/status')
+            .then(response => response.json())
+            .then(data => {
+                const processingDiv = document.getElementById('processing-status');
+                const processingIndicator = document.getElementById('processing-indicator');
+                const processingProgress = document.getElementById('processing-progress');
+                
+                if (data.processing) {
+                    processingDiv.style.display = 'block';
+                    processingIndicator.innerHTML = `⚙️ ${data.message}`;
+                    processingProgress.innerHTML = `Progress: ${data.progress}%`;
+                } else if (data.status === 'complete') {
+                    processingDiv.style.display = 'block';
+                    processingDiv.style.background = 'rgba(0,255,0,0.1)';
+                    processingIndicator.innerHTML = `✅ ${data.message}`;
+                    processingProgress.innerHTML = 'Knowledge extraction complete! Queries will be fast now.';
+                } else {
+                    processingDiv.style.display = 'none';
+                }
+            })
+            .catch(error => {
+                console.error('Error checking processing status:', error);
+            });
+        }
+        
+        function clearCurrentFile() {
+            console.log('🔍 Clear file button clicked');
+            if (confirm('Clear the current file from memory? You can always upload it again.')) {
+                console.log('🔍 User confirmed clear - sending request');
+                fetch('/api/file/clear', { 
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                })
+                .then(response => {
+                    console.log('🔍 Clear response status:', response.status);
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('🔍 Clear response data:', data);
+                    checkFileStatus();
+                    addMessage('File cleared from memory. Upload a new file to get personalized advice!', 'ai', null, false);
+                })
+                .catch(error => {
+                    console.error('🔍 Error clearing file:', error);
+                    addMessage('Error clearing file: ' + error.toString(), 'ai', null, false);
+                });
+            } else {
+                console.log('🔍 User cancelled clear operation');
+            }
+        }
+
+        // Auto-focus on input
+        chatInput.focus();
+    });
+</script>
+</body>
+</html>
+
+            // Display "thinking" indicator
+            const thinkingIndicator = addMessage('George is thinking...', 'ai', true);
+
+            // Send question to the backend
+            fetch(`/api/projects/${projectId}/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question: question })
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Replace "thinking" with the actual answer
+                thinkingIndicator.querySelector('.content').textContent = data.answer || 'I could not find an answer.';
+            })
+            .catch(error => {
+                console.error('Error with chat:', error);
+                thinkingIndicator.querySelector('.content').textContent = 'An error occurred. Please check the server logs.';
+            });
+        });
+
+        function addMessage(text, sender, isThinking = false) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-message`;
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'content';
+            contentDiv.textContent = text;
+            
+            if (isThinking) {
+                contentDiv.classList.add('thinking');
+            }
+            
+            messageDiv.appendChild(contentDiv);
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            return messageDiv;
+        }
+    });
+</script>
+
+</body>
+</html>
