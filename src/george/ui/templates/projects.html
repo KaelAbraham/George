@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>George // My Projects</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; margin: 0; background-color: #f4f7f9; color: #333; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 2rem; text-align: center; }
+        .header h1 { margin: 0; font-size: 2.5rem; }
+        .container { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+        .card { background: white; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); margin-bottom: 1.5rem; }
+        .card-header { padding: 1rem 1.5rem; border-bottom: 1px solid #eef; }
+        .card-header h2 { margin: 0; font-size: 1.5rem; }
+        .card-body { padding: 1.5rem; }
+        .project-list { list-style: none; padding: 0; }
+        .project-item { display: flex; align-items: center; justify-content: space-between; padding: 1rem; border-radius: 6px; transition: background-color 0.2s; }
+        .project-item:not(:last-child) { border-bottom: 1px solid #eef; }
+        .project-item:hover { background-color: #f8f9ff; }
+        .project-item a { text-decoration: none; color: #4a5568; font-weight: 600; font-size: 1.1rem; }
+        .btn { display: inline-block; padding: 0.75rem 1.5rem; background: #667eea; color: white; text-decoration: none; border: none; border-radius: 5px; font-size: 1rem; cursor: pointer; transition: background-color 0.2s; }
+        .btn:hover { background: #5a67d8; }
+        .form-group { display: flex; gap: 0.5rem; }
+        .form-control { flex-grow: 1; padding: 0.75rem; border: 1px solid #ccc; border-radius: 5px; font-size: 1rem; }
+        .flash { padding: 1rem; margin-bottom: 1rem; border-radius: 5px; }
+        .flash-error { background-color: #f8d7da; color: #721c24; }
+        .flash-success { background-color: #d4edda; color: #155724; }
+        .empty-state { text-align: center; padding: 3rem; color: #718096; }
+    </style>
+</head>
+<body>
+
+    <header class="header">
+        <h1>George AI</h1>
+        <p>Your AI Assistant for Authors & World-builders</p>
+    </header>
+
+    <div class="container">
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash flash-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <!-- New Project Form -->
+        <div class="card">
+            <div class="card-header">
+                <h2>Create a New Project</h2>
+            </div>
+            <div class="card-body">
+                <form action="{{ url_for('main.create_project') }}" method="POST" class="form-group">
+                    <input type="text" name="project_name" class="form-control" placeholder="Enter your new project's name..." required>
+                    <button type="submit" class="btn">Create</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Project List -->
+        <div class="card">
+            <div class="card-header">
+                <h2>My Projects</h2>
+            </div>
+            <div class="card-body">
+                {% if projects %}
+                <ul class="project-list">
+                    {% for project in projects %}
+                    <li class="project-item">
+                        <a href="{{ url_for('main.project_dashboard', project_name=project.name) }}">{{ project.name }}</a>
+                        <small style="color: #718096;">Created: {{ project.created_at.split('T')[0] }}</small>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <div class="empty-state">
+                    <p>You don't have any projects yet.</p>
+                    <p>Create one above to get started!</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>

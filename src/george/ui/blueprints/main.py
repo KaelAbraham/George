@@ -2,91 +2,42 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app
 from werkzeug.utils import secure_filename
 import os
-import sys
-from pathlib import Path
-
-# Add the src directory to the path so we can import from george
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
-
-try:
-    from george.core import GeorgeProcessor
-    from george.knowledge_base.builder import KnowledgeBaseBuilder
-    george_available = True
-except ImportError as e:
-    print(f"Warning: George modules not available: {e}")
-    george_available = False
 
 main_bp = Blueprint('main', __name__)
 
 @main_bp.route('/')
 def index():
-    """Home page with project overview."""
-    return render_template('index.html')
+    """Home page that lists all projects."""
+    projects = current_app.project_manager.list_projects()
+    # Sort projects by name for consistency
+    sorted_projects = sorted(projects, key=lambda p: p.get('name', ''))
+    return render_template('projects.html', projects=sorted_projects)
 
-@main_bp.route('/upload', methods=['GET', 'POST'])
-def upload():
-    """Upload and process manuscript."""
-    if request.method == 'POST':
-        if 'manuscript' not in request.files:
-            flash('No file selected', 'error')
-            return redirect(request.url)
-        
-        file = request.files['manuscript']
-        if file.filename == '':
-            flash('No file selected', 'error')
-            return redirect(request.url)
-        
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            upload_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
-            file.save(upload_path)
-            
-            if george_available:
-                try:
-                    # Process with George
-                    processor = GeorgeProcessor()
-                    entities = processor.extract_entities(upload_path)
-                    
-                    flash('Manuscript uploaded and processed successfully!', 'success')
-                    return redirect(url_for('main.entity_validation', filename=filename))
-                except Exception as e:
-                    flash(f'Error processing manuscript: {str(e)}', 'error')
-            else:
-                flash('Manuscript uploaded! (Processing unavailable - George modules not found)', 'success')
-                return redirect(url_for('main.index'))
-        else:
-            flash('Invalid file type. Please upload .txt, .md, or .docx files.', 'error')
+@main_bp.route('/create_project', methods=['POST'])
+def create_project():
+    """Handles new project creation."""
+    project_name = request.form.get('project_name')
+    if not project_name or not project_name.strip():
+        flash('Project name cannot be empty.', 'error')
+        return redirect(url_for('main.index'))
     
-    return render_template('upload.html')
+    try:
+        current_app.project_manager.create_project(project_name)
+        flash(f"Project '{project_name}' created successfully!", 'success')
+    except Exception as e:
+        flash(str(e), 'error')
+        
+    return redirect(url_for('main.index'))
 
-@main_bp.route('/entity_validation')
-@main_bp.route('/entity_validation/<filename>')
-def entity_validation(filename=None):
-    """Entity validation page."""
-    # For now, use mock data
-    mock_entities = [
-        {'name': 'Elias', 'type': 'CHARACTER', 'confidence': 0.95, 'context': 'Main protagonist'},
-        {'name': 'Silverdale', 'type': 'LOCATION', 'confidence': 0.88, 'context': 'Town setting'},
-        {'name': 'The Old Library', 'type': 'LOCATION', 'confidence': 0.82, 'context': 'Key location'},
-    ]
-    return render_template('entity_validation.html', entities=mock_entities, filename=filename)
+@main_bp.route('/project/<project_name>')
+def project_dashboard(project_name):
+    """Shows the dashboard for a specific project."""
+    try:
+        project_data = current_app.project_manager.load_project(project_name)
+        return f"<h1>Project Dashboard for {project_data['project_name']}</h1><p>Next, we will build the file upload and chat features here.</p>"
+    except Exception as e:
+        flash(str(e), 'error')
+        return redirect(url_for('main.index'))
 
-@main_bp.route('/chat')
-def chat():
-    """Chat interface page."""
-    return render_template('chat.html')
-
-@main_bp.route('/test')
-def test():
-    """Test page."""
-    return render_template('test.html')
-
-def allowed_file(filename):
-    """Check if file type is allowed."""
-    allowed_extensions = {'txt', 'md', 'docx'}
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_extensions
-
-@main_bp.route('/projects/<project_id>/chat')
-def chat(project_id):
-    """Chat interface page."""
-    return render_template('chat.html', project_id=project_id)
+# We will re-integrate upload, chat, etc., into the project context later.
+# For now, we focus on the project dashboard.

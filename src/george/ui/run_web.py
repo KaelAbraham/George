@@ -14,18 +14,14 @@ sys.path.insert(0, str(project_root))
 # Change to project root directory
 os.chdir(project_root)
 
-# Import and run the Flask app
+# Import and run the main Flask app (no longer app_simple)
 if __name__ == '__main__':
     try:
-        from src.george.ui.app_simple import app
+        from src.george.ui.app import app
         print("Starting George Flask application...")
         print("Open your browser to: http://localhost:5000")
         print("Press Ctrl+C to stop the server.")
         app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
     except ImportError as e:
         print(f"Error importing Flask app: {e}")
-        print("Trying alternative approach...")
-        
-        # Alternative approach - run the app module directly
-        import subprocess
-        subprocess.run([sys.executable, "-m", "src.george.ui.app_simple"])
+        print("Please ensure the application structure is correct.")
