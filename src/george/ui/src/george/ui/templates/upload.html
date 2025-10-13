@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload Manuscript - George</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .nav-bar {
+            background: rgba(0,0,0,0.1);
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .nav-bar a {
+            color: white;
+            text-decoration: none;
+            margin: 0 15px;
+            padding: 8px 16px;
+            border-radius: 5px;
+            transition: background 0.3s;
+        }
+        .nav-bar a:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        .nav-bar .logo {
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+        .container {
+            max-width: 600px;
+            margin: 50px auto;
+            background: white;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 20px;
+            transition: border-color 0.3s;
+        }
+        .upload-area:hover {
+            border-color: #667eea;
+        }
+        .upload-area.dragover {
+            border-color: #667eea;
+            background-color: #f8f9ff;
+        }
+        input[type="file"] {
+            margin: 20px 0;
+            padding: 10px;
+            width: 100%;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1.1em;
+            width: 100%;
+            transition: transform 0.2s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .format-info {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        .format-info h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        .format-list {
+            list-style: none;
+            padding: 0;
+        }
+        .format-list li {
+            padding: 5px 0;
+            padding-left: 20px;
+            position: relative;
+        }
+        .format-list li:before {
+            content: "📄";
+            position: absolute;
+            left: 0;
+        }
+        .flash-messages {
+            margin-bottom: 20px;
+        }
+        .flash-message {
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }
+        .flash-message.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .flash-message.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+    </style>
+</head>
+<body>
+    <div class="nav-bar">
+        <div class="logo">🤖 George AI</div>
+        <div>
+            <a href="/">Home</a>
+            <a href="/upload" style="background: rgba(255,255,255,0.2);">Upload</a>
+            <a href="/chat">Chat</a>
+        </div>
+    </div>
+    
+    <div class="container">
+        <h1>Upload Your Manuscript</h1>
+        
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                <div class="flash-messages">
+                    {% for message in messages %}
+                        <div class="flash-message">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+        
+        <form method="POST" enctype="multipart/form-data" id="upload-form">
+            <div class="upload-area" id="upload-area">
+                <p id="upload-message">📁 Drag and drop your manuscript here or click to browse</p>
+                <div id="file-status" style="display: none; margin-top: 10px; padding: 10px; background: #e8f5e9; border-radius: 5px;"></div>
+                <input type="file" name="manuscript" id="manuscript" accept=".txt,.md,.docx" required>
+            </div>
+            <button type="submit" class="btn" id="upload-btn">Upload and Process</button>
+        </form>
+        
+        <!-- Test buttons removed - use normal file upload instead -->
+        
+        <div class="format-info">
+            <h3>Supported Formats</h3>
+            <ul class="format-list">
+                <li><strong>.txt</strong> - Plain text files</li>
+                <li><strong>.md</strong> - Markdown files</li>
+                <li><strong>.docx</strong> - Microsoft Word documents</li>
+            </ul>
+            <p><small>Maximum file size: 16MB</small></p>
+        </div>
+    </div>
+
+    <script>
+        const uploadArea = document.getElementById('upload-area');
+        const fileInput = document.getElementById('manuscript');
+        const uploadForm = document.getElementById('upload-form');
+        const uploadBtn = document.getElementById('upload-btn');
+
+        // Handle drag and drop
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                fileInput.files = files;
+                updateUploadArea();
+            }
+        });
+
+        // Handle file input change
+        fileInput.addEventListener('change', updateUploadArea);
+
+        function updateUploadArea() {
+            const file = fileInput.files[0];
+            const fileStatusDiv = document.getElementById('file-status');
+            if (file) {
+                // Update the status div without destroying the input
+                fileStatusDiv.innerHTML = `📄 Selected: <strong>${file.name}</strong><br>Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+                fileStatusDiv.style.display = 'block';
+            } else {
+                fileStatusDiv.style.display = 'none';
+            }
+        }
+
+        // Handle form submission
+        uploadForm.addEventListener('submit', (e) => {
+            console.log('🔍 Form submission started');
+            console.log('🔍 Form method:', uploadForm.method);
+            console.log('🔍 Form action:', uploadForm.action);
+            console.log('🔍 Form enctype:', uploadForm.enctype);
+            
+            const fileInput = document.getElementById('manuscript');
+            console.log('🔍 File input value:', fileInput.value);
+            console.log('🔍 Files selected:', fileInput.files.length);
+            if (fileInput.files.length > 0) {
+                console.log('🔍 First file:', fileInput.files[0].name, fileInput.files[0].size);
+            }
+            
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Processing...';
+            
+            // Don't prevent default - let the form submit normally
+        });
+
+        // Load test file function
+        function loadTestFile() {
+            console.log('🔍 Load test file button clicked');
+            const statusDiv = document.getElementById('test-status');
+            statusDiv.style.display = 'block';
+            statusDiv.style.backgroundColor = '#cce7ff';
+            statusDiv.textContent = 'Loading test file...';
+            
+            fetch('/api/file/load-test', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => {
+                console.log('🔍 Response status:', response.status);
+                statusDiv.textContent = `Response status: ${response.status}, processing...`;
+                return response.json();
+            })
+            .then(data => {
+                console.log('🔍 Response data:', data);
+                if (data.success) {
+                    statusDiv.style.backgroundColor = '#d4edda';
+                    statusDiv.innerHTML = `✅ SUCCESS!<br>File: ${data.info.filename}<br>Words: ${data.info.word_count}<br>Session: ${data.session_test}`;
+                    setTimeout(() => {
+                        window.location.href = '/chat';
+                    }, 2000);
+                } else {
+                    statusDiv.style.backgroundColor = '#f8d7da';
+                    statusDiv.textContent = `❌ FAILED: ${data.error}`;
+                }
+            })
+            .catch(error => {
+                console.error('🔍 Fetch error:', error);
+                statusDiv.style.backgroundColor = '#f8d7da';
+                statusDiv.textContent = `❌ ERROR: ${error.toString()}`;
+            });
+        }
+
+        // Clear test file function
+        function clearTestFile() {
+            alert('Clear button clicked! Check console for details.');
+            console.log('🔍 Clear test file button clicked');
+            const statusDiv = document.getElementById('test-status');
+            statusDiv.style.display = 'block';
+            statusDiv.style.backgroundColor = '#fff3cd';
+            statusDiv.textContent = 'Clearing file...';
+            
+            fetch('/api/file/clear', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => {
+                console.log('🔍 Clear response status:', response.status);
+                statusDiv.textContent = `Clear response status: ${response.status}, processing...`;
+                return response.json();
+            })
+            .then(data => {
+                console.log('🔍 Clear response data:', data);
+                if (data.success) {
+                    statusDiv.style.backgroundColor = '#d4edda';
+                    statusDiv.innerHTML = `✅ CLEARED!<br>Message: ${data.message}`;
+                } else {
+                    statusDiv.style.backgroundColor = '#f8d7da';
+                    statusDiv.textContent = `❌ CLEAR FAILED: ${data.error}`;
+                }
+            })
+            .catch(error => {
+                console.error('🔍 Clear fetch error:', error);
+                statusDiv.style.backgroundColor = '#f8d7da';
+                statusDiv.textContent = `❌ CLEAR ERROR: ${error.toString()}`;
+            });
+        }
+    </script>
+</body>
+</html>

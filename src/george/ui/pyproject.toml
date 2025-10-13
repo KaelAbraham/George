@@ -1,0 +1,82 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "george"
+version = "1.0.0"
+description = "Standalone AI assistant for authors and world-builders"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+keywords = ["ai", "writing", "nlp", "knowledge-base", "authors"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Linguistic",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "python-docx>=0.8.11",
+    "markdown>=3.4.1",
+    "chardet>=5.1.0",
+    "python-magic>=0.4.27",
+    "flask>=3.1.2",
+    "itsdangerous>=2.2.0",
+    "werkzeug>=3.1.3",
+    "jinja2>=3.1.6",
+    "click>=8.2.1",
+    "spacy>=3.7.0",
+    "spacy-transformers>=1.3.0",
+    "chromadb>=0.5.0",
+    "sentence-transformers>=2.2.2",
+    "ollama>=0.1.0",
+    "numpy>=1.24.0",
+    "pandas>=2.1.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.65.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.2.0",
+    "pytest-cov>=4.0.0",
+    "black",
+    "flake8",
+    "mypy",
+]
+
+[project.scripts]
+george = "george.core:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/george"
+Documentation = "https://github.com/yourusername/george/docs"
+Repository = "https://github.com/yourusername/george"
+"Bug Tracker" = "https://github.com/yourusername/george/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

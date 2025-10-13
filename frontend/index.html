@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>George - Knowledge Extractor Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 900px;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .section {
+            margin-bottom: 30px;
+        }
+
+        .section h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.5em;
+        }
+
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .upload-area:hover {
+            background: #f8f9ff;
+            border-color: #764ba2;
+        }
+
+        .upload-area.dragover {
+            background: #e8ebff;
+            border-color: #764ba2;
+        }
+
+        .upload-icon {
+            font-size: 3em;
+            margin-bottom: 10px;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 25px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .progress-container {
+            display: none;
+            margin-top: 20px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #e0e0e0;
+            border-radius: 15px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .progress-message {
+            margin-top: 10px;
+            color: #667eea;
+            font-weight: 500;
+        }
+
+        .entities-display {
+            display: none;
+            margin-top: 20px;
+        }
+
+        .entity-list {
+            background: #f8f9ff;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 10px;
+        }
+
+        .entity-list h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .entity-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .entity-tag {
+            background: white;
+            border: 2px solid #667eea;
+            color: #667eea;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+        }
+
+        .chat-container {
+            display: none;
+            margin-top: 30px;
+        }
+
+        .chat-messages {
+            background: #f8f9ff;
+            border-radius: 10px;
+            padding: 20px;
+            height: 300px;
+            overflow-y: auto;
+            margin-bottom: 15px;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            padding: 10px 15px;
+            border-radius: 10px;
+        }
+
+        .message.user {
+            background: #667eea;
+            color: white;
+            margin-left: 20%;
+        }
+
+        .message.bot {
+            background: white;
+            color: #333;
+            margin-right: 20%;
+            border: 1px solid #e0e0e0;
+        }
+
+        .chat-input-container {
+            display: flex;
+            gap: 10px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 12px 20px;
+            border: 2px solid #667eea;
+            border-radius: 25px;
+            font-size: 1em;
+            outline: none;
+        }
+
+        input[type="text"]:focus {
+            border-color: #764ba2;
+        }
+
+        .success-message {
+            background: #4caf50;
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 15px;
+            display: none;
+        }
+
+        .error-message {
+            background: #f44336;
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 15px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 George</h1>
+            <p>AI-Powered Knowledge Extraction for Your Manuscripts</p>
+        </div>
+
+        <div class="content">
+            <!-- Upload Section -->
+            <div class="section">
+                <h2>📁 Upload Your Manuscript</h2>
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📄</div>
+                    <p>Drag and drop your file here or click to browse</p>
+                    <p style="font-size: 0.9em; color: #666; margin-top: 10px;">Supported: .txt, .md</p>
+                    <input type="file" id="fileInput" accept=".txt,.md">
+                </div>
+                <button id="uploadBtn" style="margin-top: 15px; display: none;">Upload & Extract</button>
+
+                <!-- Progress -->
+                <div class="progress-container" id="progressContainer">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill">0%</div>
+                    </div>
+                    <div class="progress-message" id="progressMessage">Starting...</div>
+                </div>
+
+                <!-- Messages -->
+                <div class="success-message" id="successMessage"></div>
+                <div class="error-message" id="errorMessage"></div>
+            </div>
+
+            <!-- Entities Display -->
+            <div class="entities-display" id="entitiesDisplay">
+                <h2>🎭 Extracted Knowledge</h2>
+                
+                <div class="entity-list">
+                    <h3>Characters</h3>
+                    <div class="entity-tags" id="characterTags"></div>
+                </div>
+
+                <div class="entity-list">
+                    <h3>Locations</h3>
+                    <div class="entity-tags" id="locationTags"></div>
+                </div>
+
+                <div class="entity-list">
+                    <h3>Important Terms</h3>
+                    <div class="entity-tags" id="termTags"></div>
+                </div>
+            </div>
+
+            <!-- Chat Interface -->
+            <div class="chat-container" id="chatContainer">
+                <h2>💬 Ask Questions</h2>
+                <div class="chat-messages" id="chatMessages">
+                    <div class="message bot">
+                        👋 Hello! I've analyzed your manuscript. Ask me anything about the characters, plot, or themes!
+                    </div>
+                </div>
+                <div class="chat-input-container">
+                    <input type="text" id="chatInput" placeholder="Ask a question about your manuscript...">
+                    <button id="sendBtn">Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://127.0.0.1:5001';
+        let selectedFile = null;
+
+        // DOM Elements
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressFill = document.getElementById('progressFill');
+        const progressMessage = document.getElementById('progressMessage');
+        const entitiesDisplay = document.getElementById('entitiesDisplay');
+        const chatContainer = document.getElementById('chatContainer');
+        const chatMessages = document.getElementById('chatMessages');
+        const chatInput = document.getElementById('chatInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const successMessage = document.getElementById('successMessage');
+        const errorMessage = document.getElementById('errorMessage');
+
+        // File upload handling
+        uploadArea.addEventListener('click', () => fileInput.click());
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFileSelect(files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
+
+        function handleFileSelect(file) {
+            selectedFile = file;
+            uploadArea.innerHTML = `
+                <div class="upload-icon">✅</div>
+                <p><strong>${file.name}</strong></p>
+                <p style="font-size: 0.9em; color: #666;">Ready to upload</p>
+            `;
+            uploadBtn.style.display = 'block';
+        }
+
+        uploadBtn.addEventListener('click', uploadFile);
+
+        async function uploadFile() {
+            if (!selectedFile) return;
+
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+
+            uploadBtn.disabled = true;
+            progressContainer.style.display = 'block';
+            hideMessages();
+
+            try {
+                const response = await fetch(`${API_URL}/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Upload failed');
+                }
+
+                // Poll for progress
+                pollProgress();
+
+            } catch (error) {
+                showError(error.message);
+                uploadBtn.disabled = false;
+                progressContainer.style.display = 'none';
+            }
+        }
+
+        async function pollProgress() {
+            const interval = setInterval(async () => {
+                try {
+                    const response = await fetch(`${API_URL}/status`);
+                    const status = await response.json();
+
+                    progressFill.style.width = status.progress + '%';
+                    progressFill.textContent = status.progress + '%';
+                    progressMessage.textContent = status.message;
+
+                    if (!status.processing && status.progress === 100) {
+                        clearInterval(interval);
+                        onExtractionComplete();
+                    }
+                } catch (error) {
+                    clearInterval(interval);
+                    showError('Failed to get status');
+                }
+            }, 1000);
+        }
+
+        async function onExtractionComplete() {
+            showSuccess('✅ Knowledge extraction complete!');
+            uploadBtn.disabled = false;
+
+            // Fetch and display entities
+            try {
+                const response = await fetch(`${API_URL}/entities`);
+                const entities = await response.json();
+                displayEntities(entities);
+                
+                // Show chat interface
+                chatContainer.style.display = 'block';
+            } catch (error) {
+                showError('Failed to load entities');
+            }
+        }
+
+        function displayEntities(entities) {
+            const characterTags = document.getElementById('characterTags');
+            const locationTags = document.getElementById('locationTags');
+            const termTags = document.getElementById('termTags');
+
+            characterTags.innerHTML = entities.characters.map(c => 
+                `<span class="entity-tag">${c}</span>`
+            ).join('');
+
+            locationTags.innerHTML = entities.locations.length > 0 
+                ? entities.locations.map(l => `<span class="entity-tag">${l}</span>`).join('')
+                : '<span style="color: #666;">No locations found</span>';
+
+            termTags.innerHTML = entities.terms.slice(0, 10).map(t => 
+                `<span class="entity-tag">${t}</span>`
+            ).join('');
+
+            entitiesDisplay.style.display = 'block';
+        }
+
+        // Chat functionality
+        sendBtn.addEventListener('click', sendMessage);
+        chatInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+        async function sendMessage() {
+            const question = chatInput.value.trim();
+            if (!question) return;
+
+            // Add user message
+            addMessage('user', question);
+            chatInput.value = '';
+
+            // Add loading message
+            const loadingMsg = addMessage('bot', '🤔 Thinking...');
+
+            try {
+                const response = await fetch(`${API_URL}/query`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question })
+                });
+
+                const data = await response.json();
+                
+                // Remove loading message and add real response
+                loadingMsg.remove();
+                addMessage('bot', data.answer);
+
+            } catch (error) {
+                loadingMsg.remove();
+                addMessage('bot', '❌ Sorry, I encountered an error: ' + error.message);
+            }
+        }
+
+        function addMessage(type, text) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            messageDiv.textContent = text;
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            return messageDiv;
+        }
+
+        function showSuccess(message) {
+            successMessage.textContent = message;
+            successMessage.style.display = 'block';
+            setTimeout(() => successMessage.style.display = 'none', 5000);
+        }
+
+        function showError(message) {
+            errorMessage.textContent = '❌ ' + message;
+            errorMessage.style.display = 'block';
+        }
+
+        function hideMessages() {
+            successMessage.style.display = 'none';
+            errorMessage.style.display = 'none';
+        }
+
+        // Check API connection on load
+        window.addEventListener('load', async () => {
+            try {
+                const response = await fetch(`${API_URL}/`);
+                if (!response.ok) throw new Error('API not responding');
+                console.log('✅ Connected to George API');
+            } catch (error) {
+                showError('Cannot connect to backend. Make sure the server is running on port 5001.');
+            }
+        });
+    </script>
+</body>
+</html>

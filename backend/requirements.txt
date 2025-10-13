@@ -1,0 +1,14 @@
+# George Knowledge Extractor - Backend Dependencies
+
+# Web Framework
+Flask>=3.0.0
+flask-cors>=4.0.0
+
+# Google Gemini API (use latest version for Python 3.14 compatibility)
+google-generativeai>=0.8.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# File handling
+Werkzeug>=3.0.1
