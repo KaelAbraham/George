@@ -487,7 +487,15 @@
                 
                 // Remove loading message and add real response
                 loadingMsg.remove();
-                addMessage('bot', data.answer);
+
+                if (!response.ok) {
+                    const errorText = data.error || 'Sorry, something went wrong while answering.';
+                    addMessage('bot', `❌ ${errorText}`);
+                    return;
+                }
+
+                const answerText = data.answer || data.message || '⚠️ I could not compose an answer for that question.';
+                addMessage('bot', answerText);
 
             } catch (error) {
                 loadingMsg.remove();

@@ -42,7 +42,7 @@ class ProfileBuilder:
         Returns:
             Path to the created markdown file
         """
-        print(f"📝 Building profile for character: {character_name}")
+        print(f"[BUILD] Building profile for character: {character_name}")
         
         # Chunk the text (process in 3000 char chunks to find all mentions)
         chunk_size = 3000
@@ -81,10 +81,8 @@ List only the facts present in this excerpt:
 
 Be BRIEF and FACTUAL. Only list what's explicitly shown."""
             
-            result = self.ai.chat(prompt, project_context="")
-            if result['success']:
-                # Parse and categorize the response
-                response = result['response']
+            response = self.ai.generate_response(prompt, temperature=0.2)
+            if response:
                 character_data['appearances'].append({
                     'chunk': i,
                     'details': response
@@ -106,8 +104,9 @@ Create a structured profile with sections:
 
 Be concise but complete."""
         
-        result = self.ai.chat(summary_prompt, project_context="")
-        final_profile = result['response'] if result['success'] else "Profile generation failed."
+        final_profile = self.ai.generate_response(summary_prompt, temperature=0.5)
+        if not final_profile:
+            final_profile = "Profile generation failed."
         
         # Create markdown file
         profile_md = f"""# Character Profile: {character_name}
@@ -129,7 +128,7 @@ Be concise but complete."""
         with open(profile_path, 'w', encoding='utf-8') as f:
             f.write(profile_md)
         
-        print(f"✅ Profile saved: {profile_path}")
+        print(f"[OK] Profile saved: {profile_path}")
         return str(profile_path)
     
     def build_location_profile(self, location_name: str, full_text: str, entity: Entity) -> str:
@@ -162,9 +161,9 @@ List only what's explicitly described:
 
 Be BRIEF and FACTUAL."""
             
-            result = self.ai.chat(prompt, project_context="")
-            if result['success']:
-                location_details.append(result['response'])
+            response = self.ai.generate_response(prompt, temperature=0.2)
+            if response:
+                location_details.append(response)
         
         # Generate summary
         all_details = '\n\n'.join(location_details)
@@ -179,8 +178,9 @@ Include:
 - Notable Events
 - Atmosphere/Mood"""
         
-        result = self.ai.chat(summary_prompt, project_context="")
-        final_profile = result['response'] if result['success'] else "Profile generation failed."
+        final_profile = self.ai.generate_response(summary_prompt, temperature=0.5)
+        if not final_profile:
+            final_profile = "Profile generation failed."
         
         # Create markdown
         profile_md = f"""# Location Profile: {location_name}
@@ -200,12 +200,12 @@ Include:
         with open(profile_path, 'w', encoding='utf-8') as f:
             f.write(profile_md)
         
-        print(f"✅ Profile saved: {profile_path}")
+        print(f"[OK] Profile saved: {profile_path}")
         return str(profile_path)
     
     def build_term_profile(self, term_name: str, full_text: str, entity: Entity) -> str:
         """Build a profile for unique terms/concepts."""
-        print(f"📚 Building profile for term: {term_name}")
+        print(f"[BUILD] Building profile for term: {term_name}")
         
         # For terms, extract all contexts where it appears
         contexts = entity.contexts[:10]  # Limit to first 10 mentions
@@ -222,8 +222,9 @@ Describe:
 
 Be BRIEF."""
         
-        result = self.ai.chat(prompt, project_context="")
-        description = result['response'] if result['success'] else "Analysis failed."
+        description = self.ai.generate_response(prompt, temperature=0.3)
+        if not description:
+            description = "Analysis failed."
         
         profile_md = f"""# Term: {term_name}
 
@@ -242,5 +243,5 @@ Be BRIEF."""
         with open(profile_path, 'w', encoding='utf-8') as f:
             f.write(profile_md)
         
-        print(f"✅ Profile saved: {profile_path}")
+        print(f"[OK] Profile saved: {profile_path}")
         return str(profile_path)

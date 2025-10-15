@@ -167,7 +167,7 @@ Return the COMPLETE updated profile (all sections, not just changes)."""
             
             return {
                 'success': True,
-                'message': f"✅ Updated profile for '{entity_name}'",
+                'message': f"[OK] Updated profile for '{entity_name}'",
                 'file': str(profile_file)
             }
         except Exception as e:
@@ -225,7 +225,7 @@ Return the COMPLETE updated profile."""
             
             return {
                 'success': True,
-                'message': f"✅ Added information to '{entity_name}' profile"
+                'message': f"[OK] Added information to '{entity_name}' profile"
             }
         except Exception as e:
             return {'success': False, 'message': f"Error saving: {e}"}
@@ -277,7 +277,7 @@ Return the COMPLETE updated profile."""
             
             return {
                 'success': True,
-                'message': f"✅ Removed information from '{entity_name}' profile"
+                'message': f"[OK] Removed information from '{entity_name}' profile"
             }
         except Exception as e:
             return {'success': False, 'message': f"Error saving: {e}"}
@@ -335,7 +335,7 @@ Return the COMPLETE merged profile."""
             
             return {
                 'success': True,
-                'message': f"✅ Merged '{entity2}' into '{entity1}'. Deleted duplicate profile."
+                'message': f"[OK] Merged '{entity2}' into '{entity1}'. Deleted duplicate profile."
             }
         except Exception as e:
             return {'success': False, 'message': f"Error saving: {e}"}

@@ -46,7 +46,7 @@ class EntityExtractor:
         Returns:
             Dictionary of entity name -> Entity object
         """
-        print("🔍 Step 1: Comprehensive Entity Identification")
+        print("[ANALYZE] Step 1: Comprehensive Entity Identification")
         print("   Reading manuscript to identify ALL characters, settings, and proper names...")
         
         # Process in large chunks to cover the ENTIRE manuscript
@@ -90,15 +90,15 @@ If none found in a category, write "none"."""
                     response_text = result['response']
                     self._accumulate_entities(response_text, all_entities)
                 else:
-                    print(f"   ⚠️ Chunk {i+1} AI call failed")
+                    print(f"   [WARN] Chunk {i+1} AI call failed")
             except Exception as e:
-                print(f"   ⚠️ Chunk {i+1} analysis failed: {e}")
+                print(f"   [WARN] Chunk {i+1} analysis failed: {e}")
                 continue
         
         # Convert sets to Entity objects
-        print(f"\n   ✅ Found {len(all_entities['characters'])} characters")
-        print(f"   ✅ Found {len(all_entities['locations'])} locations")
-        print(f"   ✅ Found {len(all_entities['terms'])} terms")
+        print(f"\n   [OK] Found {len(all_entities['characters'])} characters")
+        print(f"   [OK] Found {len(all_entities['locations'])} locations")
+        print(f"   [OK] Found {len(all_entities['terms'])} terms")
         
         entities = {}
         for name in all_entities['characters']:

@@ -64,7 +64,7 @@ class QueryAnalyzer:
             - entities: List of relevant entity names
             - needs_full_text: Boolean if query needs access to full manuscript
         """
-        print(f"🔍 Analyzing query: {user_question}")
+        print(f"[INFO] Analyzing query: {user_question}")
         
         # Refresh entity list
         self.available_entities = self._scan_knowledge_base()
@@ -108,10 +108,12 @@ Respond with ONLY a comma-separated list of entity names, or "NONE" if none are 
 If the question seems to be about actions/events (like surgery, payment, operations), consider which CHARACTER might be involved."""
             
             try:
-                ai_response = self.ai.chat(ai_prompt, project_context="")
-                print(f"  🤖 AI entity detection: {ai_response}")
+                ai_result = self.ai.chat(ai_prompt, project_context="")
+                print(f"  [INFO] AI entity detection: {ai_result}")
                 
-                if ai_response.strip().upper() != "NONE":
+                ai_response = ai_result.get('response', '') if isinstance(ai_result, dict) else str(ai_result)
+                
+                if ai_response and ai_response.strip().upper() != "NONE":
                     # Parse AI response
                     suggested_entities = [e.strip() for e in ai_response.split(',')]
                     # Match to actual entity names
@@ -127,7 +129,7 @@ If the question seems to be about actions/events (like surgery, payment, operati
                             if term.lower() in entity_lower or entity_lower in term.lower():
                                 mentioned_terms.append(term)
             except Exception as e:
-                print(f"  ⚠️ AI analysis failed: {e}")
+                print(f"  [WARN] AI analysis failed: {e}")
         
         # Determine query type and relevant entities
         result = {

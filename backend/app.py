@@ -2,44 +2,60 @@
 George Knowledge Extractor - Flask Backend
 A demo application for extracting and querying knowledge from manuscripts using AI.
 """
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import os
 import json
 from pathlib import Path
 from dotenv import load_dotenv
-from gemini_client import GeminiClient
+import chardet
+import sys
 
-# Load environment variables
-load_dotenv()
+# Add the 'src' directory to the Python path
+project_root = Path(__file__).parent.parent
+src_path = project_root / 'src'
+sys.path.insert(0, str(src_path))
+
+# Now we can import directly from the 'george' package
+from george.llm_integration import GeorgeAI
+from george.knowledge_extraction.orchestrator import KnowledgeExtractor
+
+# Load environment variables from project root
+load_dotenv(dotenv_path=project_root / '.env')
 
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend communication
 
 # Configuration
-UPLOAD_FOLDER = Path('uploads')
-KNOWLEDGE_BASE_FOLDER = Path('knowledge_base')
+UPLOAD_FOLDER = project_root / 'data' / 'uploads'
+PROJECTS_FOLDER = UPLOAD_FOLDER / 'projects'
 ALLOWED_EXTENSIONS = {'txt', 'md'}
 
 UPLOAD_FOLDER.mkdir(exist_ok=True)
-KNOWLEDGE_BASE_FOLDER.mkdir(exist_ok=True)
+PROJECTS_FOLDER.mkdir(exist_ok=True)
 
-# Initialize Gemini client
+# Initialize AI and Knowledge Extractor
+# In a real app, these would be managed more robustly.
 try:
-    gemini = GeminiClient()
-    print("✅ Gemini API client initialized")
+    george_ai = GeorgeAI()
+    # We will initialize the extractor when a file is uploaded.
+    print("✅ George AI client initialized")
 except Exception as e:
-    print(f"❌ Failed to initialize Gemini client: {e}")
-    gemini = None
+    print(f"❌ Failed to initialize George AI client: {e}")
+    george_ai = None
 
-# Global state (in production, use Redis or database)
+
+# Global state (in production, use a dedicated state manager)
+# This simple dictionary is for demo purposes only.
+knowledge_extractor = None
 extraction_status = {
     'processing': False,
     'progress': 0,
     'message': 'Ready',
-    'entities': None
+    'entities': None,
+    'filename': None,
 }
 
 
@@ -50,21 +66,39 @@ def allowed_file(filename):
 
 @app.route('/')
 def index():
+    """Serve the frontend or redirect to demo."""
+    from flask import redirect
+    return redirect('/demo')
+
+@app.route('/api/status')
+def api_status():
     """Health check endpoint."""
     return jsonify({
         'status': 'running',
         'service': 'George Knowledge Extractor',
-        'gemini_ready': gemini is not None
+        'ai_ready': george_ai is not None
     })
+
+
+@app.route('/demo')
+def demo():
+    """Serve the frontend demo page."""
+    from flask import send_file
+    frontend_path = Path(__file__).parent.parent / 'frontend' / 'index.html'
+    if frontend_path.exists():
+        return send_file(frontend_path)
+    else:
+        return jsonify({'error': 'Frontend not found', 'path': str(frontend_path)}), 404
 
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
     """Handle file upload and start knowledge extraction."""
-    if not gemini:
-        return jsonify({'error': 'Gemini API not initialized'}), 500
+    global knowledge_extractor  # Use the global extractor instance
+
+    if not george_ai:
+        return jsonify({'error': 'George AI not initialized'}), 500
     
-    # Check if file is in request
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
     
@@ -77,113 +111,100 @@ def upload_file():
         return jsonify({'error': 'File type not allowed. Use .txt or .md'}), 400
     
     try:
-        # Save uploaded file
         filename = secure_filename(file.filename)
-        filepath = UPLOAD_FOLDER / filename
+        project_name = Path(filename).stem
+        project_path = PROJECTS_FOLDER / project_name
+        project_path.mkdir(exist_ok=True)
+
+        filepath = project_path / filename
         file.save(filepath)
         
-        # Read file content
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
+        # Initialize the orchestrator for this project
+        knowledge_extractor = KnowledgeExtractor(george_ai, str(project_path))
         
-        # Update status
-        extraction_status['processing'] = True
-        extraction_status['progress'] = 10
-        extraction_status['message'] = 'Extracting entities...'
+        with open(filepath, 'rb') as f:
+            raw_data = f.read()
+            encoding = chardet.detect(raw_data)['encoding'] or 'utf-8'
         
-        # Extract entities
-        entities = gemini.extract_entities(content)
-        
-        extraction_status['progress'] = 30
-        extraction_status['message'] = 'Building character profiles...'
-        
-        # Build profiles for each entity
-        profiles = {}
-        total_entities = (len(entities.get('characters', [])) + 
-                         len(entities.get('locations', [])) + 
-                         len(entities.get('terms', [])))
-        
-        if total_entities == 0:
-            extraction_status['processing'] = False
-            extraction_status['progress'] = 100
-            extraction_status['message'] = 'No entities found'
-            return jsonify({'error': 'No entities found in document'}), 400
-        
-        current_entity = 0
-        
-        # Process characters
-        for char in entities.get('characters', []):
-            current_entity += 1
-            progress = 30 + int((current_entity / total_entities) * 60)
-            extraction_status['progress'] = progress
-            extraction_status['message'] = f'Building profile for {char}...'
-            
-            profile = gemini.build_profile(char, 'character', content)
-            profiles[f'character_{char}'] = profile
-            
-            # Save profile to file
-            profile_path = KNOWLEDGE_BASE_FOLDER / f'character_{char.replace(" ", "_")}.md'
-            with open(profile_path, 'w', encoding='utf-8') as f:
-                f.write(profile)
-        
-        # Process locations
-        for loc in entities.get('locations', []):
-            current_entity += 1
-            progress = 30 + int((current_entity / total_entities) * 60)
-            extraction_status['progress'] = progress
-            extraction_status['message'] = f'Building profile for {loc}...'
-            
-            profile = gemini.build_profile(loc, 'location', content)
-            profiles[f'location_{loc}'] = profile
-            
-            profile_path = KNOWLEDGE_BASE_FOLDER / f'location_{loc.replace(" ", "_")}.md'
-            with open(profile_path, 'w', encoding='utf-8') as f:
-                f.write(profile)
-        
-        # Process terms (limit to first 5 to save time)
-        for term in entities.get('terms', [])[:5]:
-            current_entity += 1
-            progress = 30 + int((current_entity / total_entities) * 60)
-            extraction_status['progress'] = progress
-            extraction_status['message'] = f'Building profile for {term}...'
-            
-            profile = gemini.build_profile(term, 'term', content)
-            profiles[f'term_{term}'] = profile
-            
-            profile_path = KNOWLEDGE_BASE_FOLDER / f'term_{term.replace(" ", "_")}.md'
-            with open(profile_path, 'w', encoding='utf-8') as f:
-                f.write(profile)
-        
-        # Complete
-        extraction_status['processing'] = False
-        extraction_status['progress'] = 100
-        extraction_status['message'] = 'Extraction complete!'
-        extraction_status['entities'] = entities
+        try:
+            content = raw_data.decode(encoding)
+        except (UnicodeDecodeError, TypeError):
+            content = raw_data.decode('latin-1', errors='replace')
+
+        # Update status before starting the background thread
+        extraction_status.update({
+            'processing': True,
+            'progress': 5,
+            'message': 'Starting knowledge extraction...',
+            'filename': filename,
+        })
+
+        # In a real app, you'd use a task queue like Celery.
+        # Here, we'll just run it and let the client poll for status.
+        # This is NOT robust for production.
+        result = knowledge_extractor.process_manuscript(content, filename)
+
+        # Update final status
+        extraction_status.update({
+            'processing': False,
+            'progress': 100,
+            'message': 'Extraction complete!',
+            'entities': result,
+        })
         
         return jsonify({
             'success': True,
-            'filename': filename,
-            'entities': entities,
-            'profiles_created': len(profiles)
+            'message': 'Extraction complete!',
+            'data': result
         })
         
     except Exception as e:
-        extraction_status['processing'] = False
-        extraction_status['message'] = f'Error: {str(e)}'
+        extraction_status.update({
+            'processing': False,
+            'message': f'Error: {str(e)}'
+        })
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/status', methods=['GET'])
 def get_status():
-    """Get current extraction status."""
+    """Return the current status of the knowledge extraction process."""
     return jsonify(extraction_status)
+
+
+@app.route('/entities', methods=['GET'])
+def get_entities():
+    """Return the extracted entities after processing is complete."""
+    if extraction_status['processing']:
+        return jsonify({'error': 'Processing not complete'}), 400
+    
+    if not knowledge_extractor:
+        return jsonify({'error': 'Extraction has not been run yet.'}), 400
+
+    try:
+        # Get entity names grouped by type
+        extractor = knowledge_extractor.extractor
+        characters = [e.name for e in extractor.get_entities_by_type('character')]
+        locations = [e.name for e in extractor.get_entities_by_type('location')]
+        terms = [e.name for e in extractor.get_entities_by_type('term')]
+        print(f"[ENTITIES] characters={len(characters)} locations={len(locations)} terms={len(terms)}")
+        
+        return jsonify({
+            'characters': characters,
+            'locations': locations,
+            'terms': terms,
+            'total': len(characters) + len(locations) + len(terms)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/query', methods=['POST'])
 def query():
     """Answer a question using the knowledge base."""
-    if not gemini:
-        return jsonify({'error': 'Gemini API not initialized'}), 500
+    global knowledge_extractor
+    if not knowledge_extractor:
+        return jsonify({'error': 'Knowledge base not ready. Please upload a file first.'}), 400
     
     data = request.get_json()
     question = data.get('question', '')
@@ -192,8 +213,36 @@ def query():
         return jsonify({'error': 'No question provided'}), 400
     
     try:
-        # Load relevant profiles from knowledge base
-        context_parts = []
+        result = knowledge_extractor.answer_query(question)
+        print(f"[QUERY][DEBUG] extractor_result={result}")
+        if not isinstance(result, dict):
+            print(f"[QUERY][ERROR] Unexpected response type: {type(result)}")
+            return jsonify({'error': 'Unexpected response from knowledge extractor.'}), 500
+
+        if not result.get('success'):
+            error_message = result.get('error') or result.get('response') or 'Unknown error from knowledge extractor'
+            print(f"[QUERY][ERROR] {error_message}")
+            return jsonify({'error': error_message}), 500
+
+        answer_text = result.get('response')
+        if not answer_text:
+            answer_text = '⚠️ I could not compose an answer for that question.'
+
+        answer_payload = {
+            'answer': answer_text,
+            'model': result.get('model'),
+            'context_used': result.get('context_used'),
+        }
+
+        if result.get('fallback_used'):
+            answer_payload['fallback_used'] = True
+            answer_payload['fallback_reason'] = result.get('fallback_reason')
+
+        print(f"[QUERY][OK] context_used={answer_payload['context_used']} model={answer_payload['model']} fallback={result.get('fallback_used', False)}")
+        return jsonify(answer_payload)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
         
         # Simple keyword matching to find relevant profiles
         question_lower = question.lower()
@@ -233,19 +282,6 @@ def query():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/entities', methods=['GET'])
-def get_entities():
-    """Get list of extracted entities."""
-    if extraction_status['entities']:
-        return jsonify(extraction_status['entities'])
-    else:
-        return jsonify({
-            'characters': [],
-            'locations': [],
-            'terms': []
-        })
-
-
 if __name__ == '__main__':
     print("=" * 60)
     print("🚀 George Knowledge Extractor")
@@ -255,6 +291,5 @@ if __name__ == '__main__':
     print("API running on: http://127.0.0.1:5001")
     print("=" * 60)
     
-    # Use waitress instead of Flask's built-in server (Python 3.14 compatibility)
-    from waitress import serve
-    serve(app, host='127.0.0.1', port=5001)
+    # Run Flask development server
+    app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)

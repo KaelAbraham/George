@@ -54,7 +54,7 @@ class KnowledgeExtractor:
             Processing summary with entity counts
         """
         print(f"\n{'='*60}")
-        print(f"🚀 Starting knowledge extraction for: {filename}")
+        print(f"[START] Starting knowledge extraction for: {filename}")
         print(f"{'='*60}\n")
         
         # Phase 1: Extract entities
@@ -79,7 +79,7 @@ class KnowledgeExtractor:
             try:
                 self.profile_builder.build_character_profile(entity.name, text, entity)
             except Exception as e:
-                print(f"  ⚠️  Error building profile for {entity.name}: {e}")
+                print(f"  [WARN] Error building profile for {entity.name}: {e}")
         
         # Build location profiles
         locations = self.extractor.get_entities_by_type('location')
@@ -87,7 +87,7 @@ class KnowledgeExtractor:
             try:
                 self.profile_builder.build_location_profile(entity.name, text, entity)
             except Exception as e:
-                print(f"  ⚠️  Error building profile for {entity.name}: {e}")
+                print(f"  [WARN] Error building profile for {entity.name}: {e}")
         
         # Build term profiles
         terms = self.extractor.get_entities_by_type('term')
@@ -95,12 +95,12 @@ class KnowledgeExtractor:
             try:
                 self.profile_builder.build_term_profile(entity.name, text, entity)
             except Exception as e:
-                print(f"  ⚠️  Error building profile for {entity.name}: {e}")
+                print(f"  [WARN] Error building profile for {entity.name}: {e}")
         
         self.processing_complete = True
         
         print(f"\n{'='*60}")
-        print(f"✅ Knowledge extraction complete!")
+        print(f"[OK] Knowledge extraction complete!")
         print(f"{'='*60}\n")
         
         return {

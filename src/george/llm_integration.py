@@ -1,5 +1,6 @@
 """
 LLM Integration Module for George - Multi-LLM Support (Ollama, OpenAI, Anthropic, etc.)
+This version implements a tiered, multi-client routing system for Gemini models.
 """
 import json
 import logging
@@ -18,532 +19,220 @@ class ChatMessage:
     timestamp: Optional[str] = None
 
 class CloudAPIClient:
-    """Client for cloud-based LLM APIs (OpenAI, Anthropic, Gemini, etc.)."""
+    """Client for cloud-based LLM APIs, primarily focused on Google Gemini."""
     
-    def __init__(self, api_key: str = None, model: str = "gpt-4o-mini", 
-                 api_base: str = "https://api.openai.com/v1", api_type: str = "openai"):
+    def __init__(self, api_key: str, model: str, api_base: str = "https://generativelanguage.googleapis.com/v1beta"):
         """
-        Initialize cloud API client.
-        
-        Args:
-            api_key: API key (or set OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY env var)
-            model: Model name (e.g., "gpt-4o-mini", "claude-3-haiku-20240307", "gemini-1.5-flash")
-            api_base: API base URL
-            api_type: "openai", "anthropic", or "gemini"
+        Initialize cloud API client for a specific Gemini model.
         """
-        self.api_type = api_type
         self.model = model
         self.api_base = api_base
         
-        # Get API key from parameter or environment
-        if api_key is None:
-            if api_type == "anthropic":
-                api_key = os.getenv("ANTHROPIC_API_KEY")
-            elif api_type == "gemini":
-                api_key = os.getenv("GEMINI_API_KEY")
-            else:
-                api_key = os.getenv("OPENAI_API_KEY")
-        
         if not api_key:
-            raise ValueError(f"API key required. Set {api_type.upper()}_API_KEY environment variable or pass api_key parameter.")
+            raise ValueError("A Google AI API key is required.")
         
         self.api_key = api_key
         self.session = requests.Session()
-        
-        # Set headers based on API type
-        if api_type == "anthropic":
-            self.session.headers.update({
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json"
-            })
-        elif api_type == "gemini":
-            # Gemini uses API key in URL, not headers
-            self.session.headers.update({
-                "Content-Type": "application/json"
-            })
-        else:  # openai
-            self.session.headers.update({
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            })
+        self.session.headers.update({"Content-Type": "application/json"})
     
     def is_available(self) -> bool:
-        """Check if API is accessible."""
-        try:
-            # Simple check - assume available if key is set for cloud APIs
-            return bool(self.api_key)
-        except Exception as e:
-            logger.warning(f"Cloud API availability check failed: {e}")
-            return False
+        """Check if the API key is set."""
+        return bool(self.api_key)
     
-    def generate_response(self, prompt: str, context: str = "", temperature: float = 0.7) -> str:
-        """Generate response using cloud API."""
-        try:
-            full_prompt = self._build_prompt(prompt, context)
-            
-            if self.api_type == "anthropic":
-                return self._generate_anthropic(full_prompt, temperature)
-            elif self.api_type == "gemini":
-                return self._generate_gemini(full_prompt, temperature)
-            else:
-                return self._generate_openai(full_prompt, temperature)
-                
-        except Exception as e:
-            logger.error(f"Error generating response: {e}")
-            return f"Sorry, I encountered an error: {str(e)}"
-    
-    def _generate_openai(self, prompt: str, temperature: float) -> str:
-        """Generate using OpenAI-compatible API."""
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": "You are George, an AI assistant for authors and world-builders. Provide helpful, concise answers about writing, characters, plot, and world-building."},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": temperature,
-            "max_tokens": 1000
-        }
-        
-        response = self.session.post(
-            f"{self.api_base}/chat/completions",
-            json=payload,
-            timeout=60
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            return result["choices"][0]["message"]["content"].strip()
-        else:
-            raise Exception(f"API error: {response.status_code} - {response.text}")
-    
-    def _generate_anthropic(self, prompt: str, temperature: float) -> str:
-        """Generate using Anthropic API."""
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-            "system": "You are George, an AI assistant for authors and world-builders. Provide helpful, concise answers about writing, characters, plot, and world-building.",
-            "temperature": temperature,
-            "max_tokens": 1000
-        }
-        
-        response = self.session.post(
-            f"{self.api_base}/messages",
-            json=payload,
-            timeout=60
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            return result["content"][0]["text"].strip()
-        else:
-            raise Exception(f"API error: {response.status_code} - {response.text}")
-    
-    def _generate_gemini(self, prompt: str, temperature: float) -> str:
-        """Generate using Google Gemini API."""
-        # Gemini API format
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": f"You are George, an AI assistant for authors and world-builders. Provide helpful, concise answers about writing, characters, plot, and world-building.\n\n{prompt}"
-                        }
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": temperature,
-                "maxOutputTokens": 1000,
-                "topP": 0.9,
-                "topK": 40
-            }
-        }
-        
-        # Gemini uses API key in URL
-        # Format: https://generativelanguage.googleapis.com/v1beta/models/MODEL_NAME:generateContent
+    def generate_response(self, prompt: str, system_prompt: str = None, temperature: float = 0.7) -> str:
+        """Generate a response using the configured Gemini model."""
         url = f"{self.api_base}/models/{self.model}:generateContent?key={self.api_key}"
         
-        logger.info(f"Gemini API request URL: {url}")
-        response = self.session.post(url, json=payload, timeout=60)
-        
-        if response.status_code == 200:
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": 2048,
+            }
+        }
+        if system_prompt:
+            payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
+
+        try:
+            response = self.session.post(url, json=payload, timeout=120)
+            response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
             result = response.json()
             return result["candidates"][0]["content"]["parts"][0]["text"].strip()
-        else:
-            raise Exception(f"Gemini API error: {response.status_code} - {response.text}")
-    
-    def _build_prompt(self, prompt: str, context: str) -> str:
-        """Build full prompt with context."""
-        if context:
-            return f"Context about the story:\n{context}\n\nQuestion: {prompt}"
-        return prompt
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API request failed for model {self.model}: {e}")
+            raise Exception(f"API Error with {self.model}: {e}")
+        except (KeyError, IndexError) as e:
+            logger.error(f"Unexpected API response structure for model {self.model}: {response.text}")
+            raise Exception(f"Invalid response from {self.model}: {e}")
 
-class OllamaClient:
-    """Client for interacting with Ollama API."""
-    
-    def __init__(self, base_url: str = "http://localhost:11434", model: str = "phi3:instruct"):
-        """
-        Initialize the Ollama client.
-        
-        Args:
-            base_url: Ollama server URL
-            model: Model name to use
-        """
-        self.base_url = base_url
-        self.model = model
-        self.session = requests.Session()
-        
-    def is_available(self) -> bool:
-        """Check if Ollama server is running."""
-        try:
-            response = self.session.get(f"{self.base_url}/api/tags", timeout=10)
-            return response.status_code == 200
-        except requests.RequestException as e:
-            logger.warning(f"Ollama availability check failed: {e}")
-            return False
-    
-    def list_models(self) -> List[str]:
-        """List available models."""
-        try:
-            response = self.session.get(f"{self.base_url}/api/tags")
-            if response.status_code == 200:
-                data = response.json()
-                return [model['name'] for model in data.get('models', [])]
-        except requests.RequestException as e:
-            logger.error(f"Error listing models: {e}")
-        return []
-    
-    def generate_response(self, prompt: str, context: str = "", temperature: float = 0.7) -> str:
-        """
-        Generate a response using the specified model.
-        
-        Args:
-            prompt: User prompt
-            context: Additional context about the story/world
-            temperature: Response randomness (0.0-1.0)
+class AIRouter:
+    """
+    Intelligently routes user queries to the appropriate Gemini model tier
+    based on complexity and context requirements.
+    """
+    def __init__(self, api_key: str):
+        if not api_key:
+            raise ValueError("API key is essential for the AI Router to function.")
             
-        Returns:
-            Generated response text
+        self.triage_client = CloudAPIClient(api_key=api_key, model="gemini-2.0-flash-lite")
+        self.standard_client = CloudAPIClient(api_key=api_key, model="gemini-2.0-flash")
+        self.pro_client = CloudAPIClient(api_key=api_key, model="gemini-2.5-pro")
+
+    def triage_query(self, user_question: str) -> Dict[str, Any]:
         """
+        Uses the fastest model to classify the query's complexity and context needs.
+        """
+        system_prompt = """You are a request triage agent. Analyze the user's question and determine two things:
+1.  **complexity**: Classify the request as 'simple_lookup' (e.g., "who is Sarah?"), 'complex_analysis' (e.g., "compare Sarah's motivations to John's"), or 'creative_task' (e.g., "write a poem about their meeting").
+2.  **needs_memory**: Determine if the question relies on unspoken context from the previous turn of conversation (e.g., using pronouns like "he", "she", "that", "it").
+
+Respond with ONLY a valid JSON object in the format: {"complexity": "...", "needs_memory": boolean}"""
+
         try:
-            # Construct the full prompt with context
-            full_prompt = self._build_prompt(prompt, context)
-            
-            payload = {
-                "model": self.model,
-                "prompt": full_prompt,
-                "stream": False,
-                "options": {
-                    "temperature": temperature,
-                    "top_p": 0.9,
-                    "top_k": 40,
-                    "num_predict": 512,  # Limit response length
-                }
-            }
-            
-            logger.info(f"Sending request to Ollama with model: {self.model}")
-            response = self.session.post(
-                f"{self.base_url}/api/generate",
-                json=payload,
-                timeout=300  # 5 minute timeout for longer responses with larger models
+            response_text = self.triage_client.generate_response(user_question, system_prompt, temperature=0.0)
+            return json.loads(response_text)
+        except (json.JSONDecodeError, Exception) as e:
+            logger.error(f"Triage failed: {e}. Defaulting to complex analysis.")
+            return {"complexity": "complex_analysis", "needs_memory": True} # Default safely
+
+    def execute_and_polish(self, user_question: str, context: str, triage_result: Dict) -> Dict:
+        """Routes to the correct model, gets a response, and polishes it."""
+        complexity = triage_result.get("complexity", "complex_analysis")
+
+        # 1. Select the appropriate client for execution
+        if complexity == 'simple_lookup':
+            execution_client = self.standard_client # Use Flash for simple lookups for quality
+        else: # complex_analysis or creative_task
+            execution_client = self.pro_client
+
+        # 2. Generate the main, factual response
+        main_prompt = f"Based on the following context, answer the user's question.\n\nContext:\n{context}\n\nQuestion:\n{user_question}"
+        model_used = execution_client.model
+        fallback_note = None
+
+        try:
+            main_response = execution_client.generate_response(
+                main_prompt,
+                system_prompt="You are a helpful AI assistant. Provide a direct, factual answer based on the context provided.",
             )
-            
-            if response.status_code == 200:
-                result = response.json()
-                generated_text = result.get('response', '').strip()
-                logger.info(f"Successfully generated response of length: {len(generated_text)}")
-                return generated_text
-            else:
-                error_msg = f"Ollama API error: {response.status_code} - {response.text}"
-                logger.error(error_msg)
-                return f"Sorry, I encountered an API error: {response.status_code}"
-                
-        except requests.exceptions.Timeout as e:
-            logger.error(f"Timeout error calling Ollama API: {e}")
-            return "Sorry, the AI is taking too long to respond. Please try a shorter question or try again."
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"Connection error calling Ollama API: {e}")
-            return "Sorry, I can't connect to the AI service. Please check if Ollama is running."
-        except requests.RequestException as e:
-            logger.error(f"Error calling Ollama API: {e}")
-            return "Sorry, I encountered a network error. Please try again."
-        except Exception as e:
-            logger.error(f"Unexpected error in generate_response: {e}")
-            return "Sorry, I encountered an unexpected error. Please try again."
-    
-    def generate_streaming_response(self, prompt: str, context: str = "", temperature: float = 0.7):
-        """
-        Generate a streaming response using the specified model.
-        
-        Args:
-            prompt: User prompt
-            context: Additional context about the story/world
-            temperature: Response randomness (0.0-1.0)
-            
-        Yields:
-            Streaming response chunks
-        """
-        try:
-            full_prompt = self._build_prompt(prompt, context)
-            
-            payload = {
-                "model": self.model,
-                "prompt": full_prompt,
-                "stream": True,
-                "options": {
-                    "temperature": temperature,
-                    "top_p": 0.9,
-                    "top_k": 40,
-                }
-            }
-            
-            response = self.session.post(
-                f"{self.base_url}/api/generate",
-                json=payload,
-                stream=True,
-                timeout=300  # 5 minute timeout for streaming responses
+        except Exception as primary_error:
+            logger.warning(
+                "Primary model %s failed during execution: %s",
+                execution_client.model,
+                primary_error,
             )
-            
-            if response.status_code == 200:
-                for line in response.iter_lines():
-                    if line:
-                        try:
-                            chunk = json.loads(line.decode('utf-8'))
-                            if 'response' in chunk:
-                                yield chunk['response']
-                            if chunk.get('done', False):
-                                break
-                        except json.JSONDecodeError:
-                            continue
-            else:
-                yield "Sorry, I encountered an error generating a response."
-                
-        except requests.RequestException as e:
-            logger.error(f"Error calling Ollama API: {e}")
-            yield "Sorry, I'm unable to connect to the AI service right now."
-    
-    def _build_prompt(self, user_prompt: str, context: str = "") -> str:
-        """
-        Build a comprehensive prompt with context for the AI.
-        
-        Args:
-            user_prompt: User's question/prompt
-            context: Story context from knowledge base
-            
-        Returns:
-            Formatted prompt for the AI
-        """
-        system_prompt = """You are George, an AI writing assistant for authors. You help with storytelling, character development, world-building, and creative writing. Give SHORT, DIRECT answers. Be concise and helpful."""
 
-        if context and len(context) > 0:
-            # Truncate context if too long to avoid timeout (increased to 12000 to capture all main characters)
-            truncated_context = context[:12000] + "..." if len(context) > 12000 else context
-            prompt = f"""{system_prompt}
+            fallback_client = None
+            if execution_client is self.pro_client:
+                fallback_client = self.standard_client
+            elif execution_client is self.standard_client:
+                fallback_client = self.triage_client
 
-The user has uploaded their manuscript. Here is an excerpt from their story:
+            if fallback_client is None:
+                raise
 
----MANUSCRIPT BEGINS---
-{truncated_context}
----MANUSCRIPT ENDS---
+            try:
+                main_response = fallback_client.generate_response(
+                    main_prompt,
+                    system_prompt="You are a helpful AI assistant. Provide a direct, factual answer based on the context provided.",
+                )
+                model_used = fallback_client.model
+                fallback_note = f"primary_failed:{execution_client.model}"
+                logger.info(
+                    "Fallback model %s succeeded after %s failure",
+                    fallback_client.model,
+                    execution_client.model,
+                )
+            except Exception as secondary_error:
+                logger.error(
+                    "Fallback model %s also failed after %s: %s",
+                    fallback_client.model,
+                    execution_client.model,
+                    secondary_error,
+                )
+                raise RuntimeError(
+                    f"Primary model {execution_client.model} failed: {primary_error}; fallback {fallback_client.model} failed: {secondary_error}"
+                ) from secondary_error
 
-User's question: {user_prompt}
+        # 3. "Georgeification" Layer: Polish the response for tone
+        polish_prompt = f"Rephrase the following answer to have a natural, conversational, and friendly tone, as if you are 'George', an AI writing assistant. Do not add any new information. Answer:\n\n{main_response}"
+        polish_model = self.standard_client.model
 
-Give a SHORT, DIRECT answer:"""
-        else:
-            prompt = f"""{system_prompt}
+        try:
+            final_response = self.standard_client.generate_response(polish_prompt, temperature=0.7)
+        except Exception as polish_error:
+            logger.warning(
+                "Polish model %s failed: %s. Returning unpolished response.",
+                self.standard_client.model,
+                polish_error,
+            )
+            final_response = main_response
+            polish_model = model_used
 
-Question: {user_prompt}
-
-Response:"""
-        
-        return prompt
+        return {
+            "response": final_response,
+            "model": model_used,  # Report the model that did the heavy lifting (or fallback)
+            "polish_model": polish_model,
+            "fallback_info": fallback_note,
+        }
 
 class GeorgeAI:
-    """Main AI interface for George application."""
+    """Main AI interface for George application, now with routing."""
     
-    def __init__(self, model: str = "phi3:instruct", knowledge_base=None,
-                 use_cloud: bool = False, api_key: str = None, api_type: str = "openai"):
-        """
-        Initialize George AI.
+    def __init__(self, use_cloud: bool = True, api_key: str = None, api_type: str = "gemini"):
+        if not use_cloud or api_type != "gemini":
+            raise NotImplementedError("This version is optimized for the Gemini cloud API router.")
         
-        Args:
-            model: Model name (Ollama model or cloud model)
-            knowledge_base: Knowledge base instance for context retrieval
-            use_cloud: If True, use cloud API instead of Ollama
-            api_key: API key for cloud service
-            api_type: "openai", "anthropic", or "gemini"
-        """
-        self.use_cloud = use_cloud
+        # Resolve API key once - use provided key or fallback to environment variable
+        resolved_api_key = api_key or os.getenv("GEMINI_API_KEY")
         
-        if use_cloud:
-            # Set API base URL based on type
-            if api_type == "gemini":
-                # Use v1beta for newer models like gemini-1.5-flash
-                api_base = "https://generativelanguage.googleapis.com/v1beta"
-            elif api_type == "anthropic":
-                api_base = "https://api.anthropic.com/v1"
-            else:  # openai
-                api_base = "https://api.openai.com/v1"
-            
-            self.llm_client = CloudAPIClient(api_key=api_key, model=model, api_base=api_base, api_type=api_type)
-        else:
-            self.llm_client = OllamaClient(model=model)
-            self.ollama = self.llm_client  # Backwards compatibility
-        
-        self.knowledge_base = knowledge_base
+        self.router = AIRouter(api_key=resolved_api_key)
+        self.knowledge_client = CloudAPIClient(api_key=resolved_api_key, model="gemini-2.5-pro")
         self.conversation_history: List[ChatMessage] = []
         
     def is_available(self) -> bool:
         """Check if AI services are available."""
-        return self.llm_client.is_available()
-    
+        return self.router.triage_client.is_available()
+
     def chat(self, message: str, project_context: str = "") -> Dict[str, Any]:
-        """
-        Process a chat message and return a response.
-        
-        Args:
-            message: User message
-            project_context: Current project context
-            
-        Returns:
-            Dictionary with response and metadata
-        """
+        """Processes a chat message using the full routing and polishing pipeline."""
         try:
-            # Add user message to history
-            user_msg = ChatMessage(role="user", content=message)
-            self.conversation_history.append(user_msg)
+            # 1. Triage the query
+            triage_result = self.router.triage_query(message)
+
+            # 2. Gather resources
+            context_parts = [project_context]
+            if triage_result.get("needs_memory", False) and self.conversation_history:
+                # Add last 3 exchanges (simplified for this example)
+                recent_history = "\n".join([f"{msg.role}: {msg.content}" for msg in self.conversation_history[-3:]])
+                context_parts.append(f"Recent Conversation History:\n{recent_history}")
             
-            # Get relevant context from knowledge base if available
-            context = self._get_relevant_context(message, project_context)
-            
-            # Generate response
-            response = self.llm_client.generate_response(message, context)
-            
-            # Add AI response to history
-            ai_msg = ChatMessage(role="assistant", content=response)
-            self.conversation_history.append(ai_msg)
+            full_context = "\n\n".join(context_parts)
+
+            # 3. Execute the routed query and get a polished response
+            result = self.router.execute_and_polish(message, full_context, triage_result)
+
+            # 4. Update history
+            self.conversation_history.append(ChatMessage(role="user", content=message))
+            self.conversation_history.append(ChatMessage(role="assistant", content=result['response']))
             
             return {
-                "response": response,
-                "context_used": context,
-                "model": self.llm_client.model,
+                "response": result['response'],
+                "model": result['model'],
                 "success": True
             }
-            
         except Exception as e:
             logger.error(f"Error in chat processing: {e}")
-            return {
-                "response": "Sorry, I encountered an error while processing your message.",
-                "error": str(e),
-                "success": False
-            }
-    
-    def chat_streaming(self, message: str, project_context: str = ""):
-        """
-        Process a chat message and return a streaming response.
-        
-        Args:
-            message: User message
-            project_context: Current project context
-            
-        Yields:
-            Response chunks
-        """
-        try:
-            # Add user message to history
-            user_msg = ChatMessage(role="user", content=message)
-            self.conversation_history.append(user_msg)
-            
-            # Get relevant context from knowledge base if available
-            context = self._get_relevant_context(message, project_context)
-            
-            # Generate streaming response
-            response_parts = []
-            for chunk in self.ollama.generate_streaming_response(message, context):
-                response_parts.append(chunk)
-                yield chunk
-            
-            # Add complete AI response to history
-            full_response = "".join(response_parts)
-            ai_msg = ChatMessage(role="assistant", content=full_response)
-            self.conversation_history.append(ai_msg)
-            
-        except Exception as e:
-            logger.error(f"Error in streaming chat: {e}")
-            yield "Sorry, I encountered an error while processing your message."
-    
-    def _get_relevant_context(self, message: str, project_context: str = "") -> str:
-        """
-        Retrieve relevant context for the user's message.
-        
-        Args:
-            message: User message
-            project_context: Current project context
-            
-        Returns:
-            Relevant context string
-        """
-        context_parts = []
-        
-        # Add project context if available
-        if project_context:
-            context_parts.append(f"Current Project: {project_context}")
-        
-        # Add knowledge base context if available
-        if self.knowledge_base:
-            try:
-                # Search for relevant entities and content
-                search_results = self.knowledge_base.search(message, limit=3)
-                if search_results:
-                    context_parts.append("Relevant Story Elements:")
-                    for result in search_results:
-                        context_parts.append(f"- {result}")
-            except Exception as e:
-                logger.warning(f"Error retrieving knowledge base context: {e}")
-        
-        # Add recent conversation context
-        if len(self.conversation_history) > 0:
-            recent_messages = self.conversation_history[-4:]  # Last 2 exchanges
-            context_parts.append("Recent Conversation:")
-            for msg in recent_messages:
-                context_parts.append(f"{msg.role}: {msg.content[:200]}...")
-        
-        return "\n".join(context_parts) if context_parts else ""
-    
+            return {"response": f"Sorry, I encountered an error: {e}", "success": False}
+
+    def get_knowledge_client(self) -> CloudAPIClient:
+        """Provides direct access to the powerful Pro client for high-value tasks."""
+        return self.knowledge_client
+
     def clear_history(self):
         """Clear conversation history."""
         self.conversation_history = []
-    
-    def get_model_info(self) -> Dict[str, Any]:
-        """Get information about the current model."""
-        return {
-            "model": self.ollama.model,
-            "available": self.is_available(),
-            "available_models": self.ollama.list_models()
-        }
 
-# Factory function for easy instantiation
-def create_george_ai(model: str = "phi3:instruct", knowledge_base=None, 
-                    use_cloud: bool = False, api_key: str = None, 
-                    api_type: str = "openai") -> GeorgeAI:
-    """
-    Create and return a GeorgeAI instance.
-    
-    Args:
-        model: Model name (e.g., "phi3:instruct" for Ollama, "gpt-4o-mini" for OpenAI, "claude-3-haiku-20240307" for Anthropic)
-        knowledge_base: Knowledge base instance
-        use_cloud: If True, use cloud API instead of Ollama
-        api_key: API key for cloud service (or set OPENAI_API_KEY/ANTHROPIC_API_KEY env var)
-        api_type: "openai" or "anthropic"
-        
-    Returns:
-        GeorgeAI instance
-    """
-    if use_cloud:
-        return GeorgeAI(model=model, knowledge_base=knowledge_base, use_cloud=True, 
-                       api_key=api_key, api_type=api_type)
-    else:
-        return GeorgeAI(model=model, knowledge_base=knowledge_base)
+def create_george_ai(api_key: str = None, api_type: str = "gemini") -> GeorgeAI:
+    """Factory function to create a GeorgeAI instance with the routing logic."""
+    return GeorgeAI(use_cloud=True, api_key=api_key, api_type=api_type)
