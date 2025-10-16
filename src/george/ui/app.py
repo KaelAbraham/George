@@ -40,9 +40,13 @@ def create_app():
 
     # --- Register Blueprints ---
     from .blueprints.main import main_bp
+    from .blueprints.auth import auth_bp
+    from .blueprints.project_manager import project_manager_bp
     # from .api.endpoints import api_bp # We will add this back later
 
     app.register_blueprint(main_bp)
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(project_manager_bp)
     # app.register_blueprint(api_bp, url_prefix='/api')
 
     return app

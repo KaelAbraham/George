@@ -1,43 +1,21 @@
 """Main UI routes for George application."""
-from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app
-from werkzeug.utils import secure_filename
-import os
+from flask import Blueprint, render_template, redirect, url_for
+from ..auth.auth_client import verify_firebase_token
 
 main_bp = Blueprint('main', __name__)
 
 @main_bp.route('/')
 def index():
-    """Home page that lists all projects."""
-    projects = current_app.project_manager.list_projects()
-    # Sort projects by name for consistency
-    sorted_projects = sorted(projects, key=lambda p: p.get('name', ''))
-    return render_template('projects.html', projects=sorted_projects)
+    """Home page - public landing page."""
+    # Public landing page (no authentication required)
+    return render_template('index.html')
 
-@main_bp.route('/create_project', methods=['POST'])
-def create_project():
-    """Handles new project creation."""
-    project_name = request.form.get('project_name')
-    if not project_name or not project_name.strip():
-        flash('Project name cannot be empty.', 'error')
-        return redirect(url_for('main.index'))
-    
-    try:
-        current_app.project_manager.create_project(project_name)
-        flash(f"Project '{project_name}' created successfully!", 'success')
-    except Exception as e:
-        flash(str(e), 'error')
-        
-    return redirect(url_for('main.index'))
+@main_bp.route('/dashboard')
+@verify_firebase_token()
+def dashboard():
+    """Renders the main user dashboard after login."""
+    # Redirect to the projects list - the actual dashboard
+    return redirect(url_for('project_manager.list_projects'))
 
-@main_bp.route('/project/<project_name>')
-def project_dashboard(project_name):
-    """Shows the dashboard for a specific project."""
-    try:
-        project_data = current_app.project_manager.load_project(project_name)
-        return f"<h1>Project Dashboard for {project_data['project_name']}</h1><p>Next, we will build the file upload and chat features here.</p>"
-    except Exception as e:
-        flash(str(e), 'error')
-        return redirect(url_for('main.index'))
-
-# We will re-integrate upload, chat, etc., into the project context later.
-# For now, we focus on the project dashboard.
+# Additional general routes (upload, chat, etc.) can be added here
+# Project-specific routes are now in the project_manager blueprint

@@ -1,47 +1,110 @@
-<script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth.js"></script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - George AI</title>
+    <style>
+        /* [You can reuse or adapt the CSS from your chat.html for a consistent style] */
+        body { font-family: sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .login-container { background: white; padding: 40px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); width: 400px; text-align: center; }
+        input { width: 100%; padding: 12px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .btn { background: #007bff; color: white; padding: 12px; border: none; border-radius: 5px; cursor: pointer; width: 100%; font-size: 1em; }
+        .btn-google { background: #DB4437; }
+        .btn-apple { background: #000000; }
+        .social-btn { margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <h1>Login to George</h1>
+        <form id="login-form">
+            <input type="email" id="email" placeholder="Email Address" required>
+            <input type="password" id="password" placeholder="Password" required>
+            <button type="submit" class="btn">Login</button>
+        </form>
+        <button id="google-signin-btn" class="btn social-btn btn-google">Sign in with Google</button>
+        <button id="apple-signin-btn" class="btn social-btn btn-apple">Sign in with Apple</button>
+    </div>
 
-<script>
-  // Your web app's Firebase configuration (from the console)
-  const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
-    authDomain: "your-project-id.firebaseapp.com",
-    projectId: "your-project-id",
-    // ... and so on
-  };
+    <script type="module">
+        // Import the functions you need from the SDKs you need
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, OAuthProvider } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-analytics.js";
 
-  // Initialize Firebase
-  const app = firebase.initializeApp(firebaseConfig);
-  const auth = firebase.auth();
+        // Your web app's Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyDXtKsm3KwmBIQnrhzjJtEo-MvlfgLAn34",
+            authDomain: "george-6a8da.firebaseapp.com",
+            projectId: "george-6a8da",
+            storageBucket: "george-6a8da.firebasestorage.app",
+            messagingSenderId: "927164112653",
+            appId: "1:927164112653:web:fa22500beaeebaccd49a44",
+            measurementId: "G-RQLXB7BBHR"
+        };
 
-  // Function to handle login
-  const loginButton = document.getElementById('login-button');
-  loginButton.addEventListener('click', async (e) => {
-    e.preventDefault();
-    const email = document.getElementById('email').value;
-    const password = document.getElementById('password').value;
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const analytics = getAnalytics(app);
+        const auth = getAuth(app);
 
-    try {
-      const userCredential = await auth.signInWithEmailAndPassword(email, password);
-
-      // --- THIS IS THE CRITICAL STEP ---
-      // Get the ID token from the signed-in user
-      const idToken = await userCredential.user.getIdToken();
-
-      // Now you can use this token to make authenticated requests to your backend
-      console.log("Successfully logged in! Token:", idToken);
-
-      // Example: Fetching protected data from your Flask API
-      const response = await fetch('/api/my-protected-data', {
-        headers: {
-          'Authorization': 'Bearer ' + idToken
+        // --- Handle Successful Login ---
+        async function handleSuccessfulLogin(user) {
+            try {
+                // Get the ID token from the signed-in user
+                const idToken = await user.getIdToken();
+                
+                // Store the token securely in localStorage for future requests
+                localStorage.setItem('firebaseIdToken', idToken);
+                
+                console.log('Login successful:', user);
+                alert(`Welcome, ${user.displayName || user.email}!`);
+                
+                // Redirect to the main dashboard after successful login
+                window.location.href = '/dashboard';
+            } catch (error) {
+                console.error('Error getting ID token:', error);
+                alert('Login successful but token retrieval failed.');
+            }
         }
-      });
-      const data = await response.json();
-      console.log("Data from protected route:", data);
 
-    } catch (error) {
-      console.error("Error logging in:", error.message);
-    }
-  });
-</script>
+        // --- 1. Handle Email/Password Login ---
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            
+            try {
+                const userCredential = await signInWithEmailAndPassword(auth, email, password);
+                await handleSuccessfulLogin(userCredential.user);
+            } catch (error) {
+                alert(`Login Failed: ${error.message}`);
+            }
+        });
+
+        // --- 2. Handle Google Sign-In ---
+        document.getElementById('google-signin-btn').addEventListener('click', async () => {
+            const provider = new GoogleAuthProvider();
+            try {
+                const result = await signInWithPopup(auth, provider);
+                await handleSuccessfulLogin(result.user);
+            } catch (error) {
+                alert(`Google Sign-In Failed: ${error.message}`);
+            }
+        });
+
+        // --- 3. Handle Apple Sign-In ---
+        document.getElementById('apple-signin-btn').addEventListener('click', async () => {
+            const provider = new OAuthProvider('apple.com');
+            try {
+                const result = await signInWithPopup(auth, provider);
+                await handleSuccessfulLogin(result.user);
+            } catch (error) {
+                alert(`Apple Sign-In Failed: ${error.message}`);
+            }
+        });
+
+    </script>
+</body>
+</html>

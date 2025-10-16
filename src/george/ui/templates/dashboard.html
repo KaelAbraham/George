@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - George AI</title>
+    <style>
+        body { font-family: sans-serif; background: #f4f7f6; margin: 0; }
+        .nav-bar { background: #333; padding: 15px 20px; color: white; display: flex; justify-content: space-between; align-items: center; }
+        .nav-bar .logo { font-size: 1.5em; font-weight: bold; }
+        .nav-bar a, #logout-btn { color: white; text-decoration: none; margin-left: 20px; background: none; border: none; font-size: 1em; cursor: pointer; }
+        .container { max-width: 1200px; margin: 40px auto; padding: 20px; }
+        .welcome-header { margin-bottom: 30px; }
+        .project-card { background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); padding: 20px; margin-bottom: 20px; }
+        .project-card h3 { margin-top: 0; }
+        .btn { background: #007bff; color: white; padding: 10px 15px; border-radius: 5px; text-decoration: none; }
+    </style>
+</head>
+<body>
+
+    <div class="nav-bar">
+        <div class="logo">🤖 George</div>
+        <div>
+            <span id="user-email"></span>
+            <button id="logout-btn">Logout</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="welcome-header">
+            <h1>Your Projects</h1>
+            <a href="#" class="btn">Create New Project</a>
+        </div>
+        <div id="projects-list">
+            <!-- Projects will be loaded here by JavaScript -->
+            <p>Loading your projects...</p>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', async () => {
+            const idToken = localStorage.getItem('firebaseIdToken');
+            if (!idToken) {
+                window.location.href = '/auth/login'; // Not logged in, redirect
+                return;
+            }
+
+            // Fetch user info and projects from our secure API
+            try {
+                const response = await fetch('/api/dashboard-data', {
+                    headers: { 'Authorization': 'Bearer ' + idToken }
+                });
+
+                if (response.status === 401) {
+                    // Token is invalid, force re-login
+                    localStorage.removeItem('firebaseIdToken');
+                    window.location.href = '/auth/login';
+                    return;
+                }
+
+                const data = await response.json();
+                document.getElementById('user-email').textContent = data.user.email;
+                
+                const projectsList = document.getElementById('projects-list');
+                projectsList.innerHTML = ''; // Clear "Loading..." message
+
+                if (data.projects && data.projects.length > 0) {
+                    data.projects.forEach(project => {
+                        const card = document.createElement('div');
+                        card.className = 'project-card';
+                        card.innerHTML = `<h3>${project.name}</h3><p>Last updated: ${project.updated_at}</p>`;
+                        projectsList.appendChild(card);
+                    });
+                } else {
+                    projectsList.innerHTML = '<p>You have no projects yet. Click "Create New Project" to get started!</p>';
+                }
+
+            } catch (error) {
+                console.error("Error fetching dashboard data:", error);
+                document.getElementById('projects-list').innerHTML = '<p style="color: red;">Could not load project data.</p>';
+            }
+        });
+
+        // Logout functionality
+        document.getElementById('logout-btn').addEventListener('click', () => {
+            localStorage.removeItem('firebaseIdToken');
+            // We should also sign out from Firebase itself for a complete logout
+            // but for now, just clearing the token works for our app's security.
+            alert("You have been logged out.");
+            window.location.href = '/auth/login';
+        });
+    </script>
+</body>
+</html>
