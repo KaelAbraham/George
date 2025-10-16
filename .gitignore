@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# Firebase credentials
+*firebase*.json
+
 # Python
 __pycache__/
 *.py[cod]
