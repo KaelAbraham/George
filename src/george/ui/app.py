@@ -1,7 +1,12 @@
-from flask import Flask
+from flask import Flask, render_template
 import os
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+from jinja2 import TemplateNotFound
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Add the parent directory to the path so we can import from src.george
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -17,7 +22,10 @@ except ImportError:
 def create_app():
     """Create and configure the Flask application."""
     app = Flask(__name__)
-    app.secret_key = 'your-super-secret-key-change-me'  # IMPORTANT: Change this!
+    
+    # Load the secret key from environment variable
+    # Provide a default (insecure) key for easy development if the variable isn't set
+    app.secret_key = os.getenv('FLASK_SECRET_KEY', 'dev-key-CHANGE-IN-PRODUCTION-use-secrets-token-hex-32')
 
     # --- Configuration ---
     # Use a directory relative to the instance folder for persistent data.
@@ -41,13 +49,22 @@ def create_app():
     # --- Register Blueprints ---
     from .blueprints.main import main_bp
     from .blueprints.auth import auth_bp
-    from .blueprints.project_manager import project_manager_bp
+    from .blueprints.project_manager import project_bp
+    from .blueprints.chat import chat_bp
     # from .api.endpoints import api_bp # We will add this back later
 
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp)
-    app.register_blueprint(project_manager_bp)
+    app.register_blueprint(project_bp)
+    app.register_blueprint(chat_bp)
     # app.register_blueprint(api_bp, url_prefix='/api')
+
+    # --- Error Handlers ---
+    @app.errorhandler(404)
+    @app.errorhandler(TemplateNotFound)
+    def page_not_found(e):
+        """Custom 404 handler for missing pages or templates."""
+        return render_template('404.html'), 404
 
     return app
 

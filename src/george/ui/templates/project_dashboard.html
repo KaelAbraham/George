@@ -35,7 +35,7 @@
                     <div class="project-card">
                         <h2>{{ project.name }}</h2>
                         <p>{{ project.description }}</p>
-                        <a href="/projects/{{ project.id }}">Open Project</a>
+                        <a href="{{ url_for('chat.chat_interface', project_name=project.name) }}">Open Project & Chat</a>
                     </div>
                 {% endfor %}
             {% else %}

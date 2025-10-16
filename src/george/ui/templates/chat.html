@@ -232,278 +232,75 @@
     document.addEventListener('DOMContentLoaded', function() {
         const chatForm = document.getElementById('chat-form');
         const chatInput = document.getElementById('chat-input');
-        const sendBtn = document.getElementById('send-btn');
         const messagesContainer = document.getElementById('messages');
-        const statusIndicator = document.getElementById('status-indicator');
-        const modelInfo = document.getElementById('model-info');
+        const projectName = '{{ project_name }}'; // Get the project name from the template
 
-        // Check AI status on load
-        checkAIStatus();
-        checkFileStatus();
-        checkProcessingStatus();
-        
-        // Poll processing status every 5 seconds
-        setInterval(checkProcessingStatus, 5000);
-
-        chatForm.addEventListener('submit', function(event) {
+        chatForm.addEventListener('submit', async function(event) {
             event.preventDefault();
             const question = chatInput.value.trim();
             if (!question) return;
 
-            // Display user's message
             addMessage(question, 'user');
             chatInput.value = '';
             
-            // Disable input while processing
-            setLoading(true);
-            
-            // Show typing indicator
-            const typingId = addTypingIndicator();
+            const thinkingIndicator = addMessage('George is thinking...', 'ai', true);
 
-            // Send message to API
-            fetch('/api/chat', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ message: question })
-            })
-            .then(response => response.json())
-            .then(data => {
-                // Remove typing indicator
-                removeMessage(typingId);
-                
-                // Display AI response
-                if (data.response) {
-                    addMessage(data.response, 'ai', data.model);
-                } else {
-                    addMessage('Sorry, I didn\'t receive a proper response.', 'ai', null, true);
+            // --- SECURE API CALL WITH FIREBASE TOKEN ---
+            
+            // 1. Get the Firebase token from localStorage
+            const idToken = localStorage.getItem('firebaseIdToken');
+            if (!idToken) {
+                alert("Your session has expired. Please log in again.");
+                window.location.href = '/auth/login';
+                return;
+            }
+
+            // 2. Send the request to the new project-specific, secure endpoint
+            try {
+                const response = await fetch(`/api/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + idToken // Send the token for authentication
+                    },
+                    body: JSON.stringify({ 
+                        question: question,
+                        project_name: projectName 
+                    })
+                });
+
+                if (response.status === 401) {
+                    alert("Authentication failed. Please log in again.");
+                    window.location.href = '/auth/login';
+                    return;
                 }
+
+                const data = await response.json();
                 
-                setLoading(false);
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                removeMessage(typingId);
-                addMessage('Sorry, I encountered an error processing your request.', 'ai', null, true);
-                setLoading(false);
-            });
+                // 3. Display the final answer
+                if (data.answer) {
+                    thinkingIndicator.querySelector('.content').textContent = data.answer;
+                    thinkingIndicator.querySelector('.content').classList.remove('thinking');
+                } else {
+                    thinkingIndicator.querySelector('.content').textContent = data.error || 'An unknown error occurred.';
+                    thinkingIndicator.querySelector('.content').classList.add('error');
+                }
+
+            } catch (error) {
+                console.error('Error with chat:', error);
+                thinkingIndicator.querySelector('.content').textContent = 'An error occurred while communicating with the server.';
+                thinkingIndicator.querySelector('.content').classList.add('error');
+            }
         });
 
-        function checkAIStatus() {
-            fetch('/api/ai/status')
-            .then(response => response.json())
-            .then(data => {
-                if (data.available) {
-                    statusIndicator.textContent = '✅ Connected to ' + data.service;
-                    statusIndicator.style.color = '#28a745';
-                    modelInfo.textContent = 'Model: ' + data.model;
-                } else {
-                    statusIndicator.textContent = '❌ AI Service Unavailable';
-                    statusIndicator.style.color = '#dc3545';
-                    modelInfo.textContent = data.error || 'Please check Ollama service';
-                }
-            })
-            .catch(error => {
-                statusIndicator.textContent = '❌ Connection Error';
-                statusIndicator.style.color = '#dc3545';
-                modelInfo.textContent = 'Failed to check AI status';
-            });
-        }
-
-        function addMessage(content, sender, model = null, isError = false) {
+        // Helper function to add messages to the chat window
+        function addMessage(text, sender, isThinking = false) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${sender}-message`;
-            messageDiv.id = 'msg-' + Date.now();
             
             const avatar = document.createElement('div');
             avatar.className = 'avatar';
             avatar.textContent = sender === 'user' ? '👤' : '🤖';
-            
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'content';
-            if (isError) contentDiv.className += ' error';
-            contentDiv.textContent = content;
-            
-            if (sender === 'user') {
-                messageDiv.appendChild(contentDiv);
-                messageDiv.appendChild(avatar);
-            } else {
-                messageDiv.appendChild(avatar);
-                messageDiv.appendChild(contentDiv);
-                
-                if (model) {
-                    const modelTag = document.createElement('div');
-                    modelTag.className = 'model-info';
-                    modelTag.textContent = `Generated by ${model}`;
-                    contentDiv.appendChild(modelTag);
-                }
-            }
-            
-            messagesContainer.appendChild(messageDiv);
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            
-            return messageDiv.id;
-        }
-
-        function addTypingIndicator() {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'message ai-message';
-            messageDiv.id = 'typing-' + Date.now();
-            
-            const avatar = document.createElement('div');
-            avatar.className = 'avatar';
-            avatar.textContent = '🤖';
-            
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'content';
-            contentDiv.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
-            
-            messageDiv.appendChild(avatar);
-            messageDiv.appendChild(contentDiv);
-            messagesContainer.appendChild(messageDiv);
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            
-            return messageDiv.id;
-        }
-
-        function removeMessage(messageId) {
-            const element = document.getElementById(messageId);
-            if (element) {
-                element.remove();
-            }
-        }
-
-        function setLoading(loading) {
-            sendBtn.disabled = loading;
-            chatInput.disabled = loading;
-            if (loading) {
-                sendBtn.textContent = 'Sending...';
-            } else {
-                sendBtn.textContent = 'Send';
-            }
-        }
-
-        function checkFileStatus() {
-            fetch('/api/file/current')
-            .then(response => response.json())
-            .then(data => {
-                const fileIndicator = document.getElementById('file-indicator');
-                const clearBtn = document.getElementById('clear-file-btn');
-                
-                if (data.loaded) {
-                    const wordCount = data.info.word_count || 0;
-                    fileIndicator.innerHTML = `📄 <strong>${data.filename}</strong> (${wordCount} words)`;
-                    fileIndicator.style.color = '#90EE90';
-                    clearBtn.style.display = 'inline-block';
-                } else {
-                    fileIndicator.innerHTML = '📄 No file loaded - upload to get personalized advice!';
-                    fileIndicator.style.color = '#FFB6C1';
-                    clearBtn.style.display = 'none';
-                }
-            })
-            .catch(error => {
-                document.getElementById('file-indicator').textContent = '📄 Error checking file status';
-            });
-        }
-
-        function checkProcessingStatus() {
-            fetch('/api/processing/status')
-            .then(response => response.json())
-            .then(data => {
-                const processingDiv = document.getElementById('processing-status');
-                const processingIndicator = document.getElementById('processing-indicator');
-                const processingProgress = document.getElementById('processing-progress');
-                
-                if (data.processing) {
-                    processingDiv.style.display = 'block';
-                    processingDiv.style.background = 'rgba(255,165,0,0.15)';
-                    processingDiv.style.border = '2px solid #ffa500';
-                    processingIndicator.innerHTML = `⚙️ ${data.message}`;
-                    processingProgress.innerHTML = `<strong>Progress: ${data.progress}%</strong> - Please wait before asking questions...`;
-                    processingProgress.style.fontWeight = 'bold';
-                } else if (data.status === 'complete') {
-                    processingDiv.style.display = 'block';
-                    processingDiv.style.background = 'rgba(0,255,0,0.2)';
-                    processingDiv.style.border = '3px solid #00ff00';
-                    processingDiv.style.padding = '20px';
-                    processingIndicator.innerHTML = `<span style="font-size: 1.3em; font-weight: bold;">🎉 ${data.message}</span>`;
-                    processingProgress.innerHTML = '<strong style="color: green; font-size: 1.1em;">✅ READY FOR QUERIES!</strong> Ask anything about your manuscript.';
-                    processingProgress.style.fontWeight = 'bold';
-                    
-                    // Auto-hide after 10 seconds (but keep visible if user wants it)
-                    setTimeout(() => {
-                        if (processingDiv.style.display !== 'none') {
-                            processingDiv.style.opacity = '0.7';
-                        }
-                    }, 10000);
-                } else {
-                    processingDiv.style.display = 'none';
-                }
-            })
-            .catch(error => {
-                console.error('Error checking processing status:', error);
-            });
-        }
-        
-        function clearCurrentFile() {
-            console.log('🔍 Clear file button clicked');
-            if (confirm('Clear the current file from memory? You can always upload it again.')) {
-                console.log('🔍 User confirmed clear - sending request');
-                fetch('/api/file/clear', { 
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                })
-                .then(response => {
-                    console.log('🔍 Clear response status:', response.status);
-                    return response.json();
-                })
-                .then(data => {
-                    console.log('🔍 Clear response data:', data);
-                    checkFileStatus();
-                    addMessage('File cleared from memory. Upload a new file to get personalized advice!', 'ai', null, false);
-                })
-                .catch(error => {
-                    console.error('🔍 Error clearing file:', error);
-                    addMessage('Error clearing file: ' + error.toString(), 'ai', null, false);
-                });
-            } else {
-                console.log('🔍 User cancelled clear operation');
-            }
-        }
-
-        // Auto-focus on input
-        chatInput.focus();
-    });
-</script>
-</body>
-</html>
-
-            // Display "thinking" indicator
-            const thinkingIndicator = addMessage('George is thinking...', 'ai', true);
-
-            // Send question to the backend
-            fetch(`/api/projects/${projectId}/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ question: question })
-            })
-            .then(response => response.json())
-            .then(data => {
-                // Replace "thinking" with the actual answer
-                thinkingIndicator.querySelector('.content').textContent = data.answer || 'I could not find an answer.';
-            })
-            .catch(error => {
-                console.error('Error with chat:', error);
-                thinkingIndicator.querySelector('.content').textContent = 'An error occurred. Please check the server logs.';
-            });
-        });
-
-        function addMessage(text, sender, isThinking = false) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${sender}-message`;
             
             const contentDiv = document.createElement('div');
             contentDiv.className = 'content';
@@ -513,13 +310,22 @@
                 contentDiv.classList.add('thinking');
             }
             
-            messageDiv.appendChild(contentDiv);
+            if (sender === 'user') {
+                messageDiv.appendChild(contentDiv);
+                messageDiv.appendChild(avatar);
+            } else {
+                messageDiv.appendChild(avatar);
+                messageDiv.appendChild(contentDiv);
+            }
+            
             messagesContainer.appendChild(messageDiv);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
             return messageDiv;
         }
+
+        // Auto-focus on input
+        chatInput.focus();
     });
 </script>
-
 </body>
 </html>

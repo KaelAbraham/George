@@ -1,19 +1,26 @@
 import firebase_admin
 from firebase_admin import credentials, auth
-from flask import request, jsonify
+from flask import request, jsonify, redirect, url_for, flash
+from pathlib import Path
 
-# --- This is the setup you've already done ---
-CREDENTIALS_PATH = "path/to/your/service-account-key.json"
+# --- Initialize Firebase Admin SDK ---
+# Path to your Firebase service account key
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+CREDENTIALS_PATH = PROJECT_ROOT / "george-6a8da-firebase-adminsdk-fbsvc-e85c43d430.json"
+
 if not firebase_admin._apps:
-    cred = credentials.Certificate(CREDENTIALS_PATH)
+    cred = credentials.Certificate(str(CREDENTIALS_PATH))
     firebase_admin.initialize_app(cred)
 # ---------------------------------------------
 
 def verify_firebase_token():
     """
     Decorator to protect routes by verifying the Firebase ID token.
+    Redirects browsers to the login page and returns JSON for API clients.
     """
     def decorator(f):
+        from functools import wraps
+        @wraps(f)
         def wrapper(*args, **kwargs):
             id_token = None
             if 'Authorization' in request.headers:
@@ -21,7 +28,13 @@ def verify_firebase_token():
                 id_token = request.headers['Authorization'].split(' ').pop()
 
             if not id_token:
-                return jsonify({"message": "Token is missing!"}), 401
+                # Check if the client prefers HTML (i.e., it's a browser)
+                if 'text/html' in request.accept_mimetypes:
+                    flash("Please log in to access this page.", "warning")
+                    return redirect(url_for('auth.login'))
+                else:
+                    # The client is an API client, so return JSON
+                    return jsonify({"message": "Token is missing!"}), 401
 
             try:
                 # Verify the token against the Firebase Auth API
@@ -30,7 +43,13 @@ def verify_firebase_token():
                 request.user = decoded_token
             except Exception as e:
                 # Token is invalid or expired
-                return jsonify({"message": f"Token is invalid: {e}"}), 401
+                # Check if the client prefers HTML (i.e., it's a browser)
+                if 'text/html' in request.accept_mimetypes:
+                    flash("Your session has expired or is invalid. Please log in.", "error")
+                    return redirect(url_for('auth.login'))
+                else:
+                    # The client is an API client, so return JSON
+                    return jsonify({"message": f"Token is invalid: {e}"}), 401
 
             return f(*args, **kwargs)
         return wrapper
