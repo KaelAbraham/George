@@ -26,7 +26,7 @@ class KnowledgeExtractor:
         # Use the GeorgeAI instance directly for knowledge extraction
         self.extractor = EntityExtractor()
         self.profile_builder = ProfileBuilder(self.ai, str(self.kb_path))
-        self.query_analyzer = QueryAnalyzer(self.ai, str(self.kb_path))
+        self.query_analyzer = QueryAnalyzer(self.ai, str(self.project_path))
 
         self.entities: Dict[str, object] = {}
         self.processing_complete = False

@@ -18,6 +18,8 @@ if str(george_dir) not in sys.path:
 # Check if llm_integration can be imported before using it
 try:
     from llm_integration import GeorgeAI, DEFAULT_TIMEOUT
+    # --- ADD THIS IMPORT ---
+    from parsers.parsers import read_manuscript_file 
 except ImportError:
     logging.critical("FATAL: Could not import llm_integration. Ensure it's in the Python path.")
     # Define dummy classes/variables to prevent NameErrors later if needed for app structure
@@ -25,6 +27,8 @@ except ImportError:
     class GeorgeAI: # Dummy class
         def chat(self, *args, **kwargs):
              return {'success': False, 'response': None, 'error': "LLM Integration module failed to load."}
+    def read_manuscript_file(*args, **kwargs): # Dummy function
+          raise ImportError("Parsers module failed to load.")
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +64,7 @@ class QueryAnalyzer:
 
     def __init__(self,
                  george_ai_router: GeorgeAI,
-                 project_kb_path: str,
+                 project_path: str, # CHANGED: Now takes the root project path
                  app_help_path: str = "src/george/app_help_docs",
                  default_router_timeout: int = 15): # Added default timeout
         """
@@ -68,17 +72,40 @@ class QueryAnalyzer:
 
         Args:
             george_ai_router: AI instance configured with a fast model for routing.
-            project_kb_path: Directory where project KB files are stored.
+            project_path: Root directory path for the specific project.
             app_help_path: Directory where app help documents are stored.
             default_router_timeout: Default timeout in seconds for the router AI call.
         """
         self.ai_router = george_ai_router
-        self.project_kb_path = Path(project_kb_path)
+        # --- Store project root path ---
+        self.project_path = Path(project_path) 
+        # --- Define KB path relative to project path ---
+        self.project_kb_path = self.project_path / "knowledge_base" 
         self.app_help_path = Path(app_help_path)
         self.default_router_timeout = default_router_timeout # Store timeout
-        # Initial scan - consider adding caching later if needed
+        # Initial scans
+        self.available_manuscript_files = self._scan_manuscripts(self.project_path)
         self.available_project_files = self._scan_knowledge_base(self.project_kb_path)
         self.available_help_files = self._scan_knowledge_base(self.app_help_path, prefix_map={'help_': 'help'})
+
+
+    # --- NEW: Function to scan for manuscript files ---
+    def _scan_manuscripts(self, project_path: Path) -> List[str]:
+        """Scan the project root for manuscript .md files."""
+        manuscripts = []
+        if not project_path.exists():
+             logger.warning(f"Project path not found: {project_path}")
+             return manuscripts
+        try:
+             # Look for .md files directly in the project root
+             for file in project_path.glob('*.md'):
+                  # Exclude files that might be part of the KB if structure changes
+                  if file.is_file() and not str(file).startswith(str(self.project_kb_path)):
+                       manuscripts.append(file.name)
+             logger.info(f"Scanned {project_path}: Found {len(manuscripts)} manuscript files.")
+        except Exception as e:
+             logger.error(f"Error scanning manuscript files at {project_path}: {e}")
+        return manuscripts
 
 
     def _scan_knowledge_base(self, kb_path: Path, prefix_map: Dict = None) -> Dict[str, List[str]]:
@@ -139,6 +166,7 @@ class QueryAnalyzer:
         # Refresh files (consider caching later)
         # Add error handling for scan failures
         try:
+             self.available_manuscript_files = self._scan_manuscripts(self.project_path)
              self.available_project_files = self._scan_knowledge_base(self.project_kb_path)
              self.available_help_files = self._scan_knowledge_base(self.app_help_path, prefix_map={'help_': 'help'})
         except Exception as scan_e:
@@ -148,9 +176,15 @@ class QueryAnalyzer:
              return None
 
 
-        # Construct prompt
+        # Construct prompt - ADD MANUSCRIPT FILES
         prompt_context = f"User Prompt: \"{user_question}\"\n\n"
-        prompt_context += "Available Project Knowledge Files:\n"
+        prompt_context += "Available Manuscript Files:\n"
+        if self.available_manuscript_files:
+            prompt_context += f"- {', '.join(self.available_manuscript_files)}\n"
+        else:
+            prompt_context += "- (No manuscript files found)\n"
+
+        prompt_context += "\nAvailable Project Knowledge Files:\n"
         if self.available_project_files:
             for category, files in self.available_project_files.items():
                 prompt_context += f"- {category}: {', '.join(files[:5])}{'...' if len(files) > 5 else ''}\n"
@@ -240,17 +274,41 @@ class QueryAnalyzer:
 
         # Determine which directory to load from
         # Handle FUNC_KB_WRITE needing project path even if it's functional
-        if classification.startswith("TIER_") or classification == "FUNC_KB_WRITE":
+        # --- UPDATED LOGIC TO DETERMINE BASE PATH ---
+        base_path = None
+        is_manuscript = False
+        if classification.startswith("TIER_"):
+             # For analysis, assume resources might be KB files OR manuscript files
+             # We'll determine path file-by-file
+             pass # Handled below
+        elif classification == "FUNC_KB_WRITE":
              base_path = self.project_kb_path
         elif classification == "FUNC_HELP":
              base_path = self.app_help_path
         else:
-             # For other functional types, no file context is usually needed
              logger.debug(f"Classification '{classification}' requires no file context.")
              return ""
 
 
         for filename in resource_files:
+             # --- Determine correct path for each file ---
+             filepath = None
+             current_base_path = base_path # Use specific path if set (e.g., for FUNC_KB_WRITE)
+
+             if classification.startswith("TIER_"):
+                 # Is it a manuscript file or a KB file?
+                 if filename in self.available_manuscript_files:
+                     current_base_path = self.project_path # Root project dir
+                     is_manuscript = True
+                 elif any(filename in file_list for file_list in self.available_project_files.values()):
+                     current_base_path = self.project_kb_path
+                     is_manuscript = False
+                 else:
+                     logger.warning(f"TIER query requested unknown resource: {filename}. Skipping.")
+                     continue
+             elif current_base_path is None: # Should only happen if logic above is flawed
+                  logger.error(f"Could not determine base path for file '{filename}' with classification '{classification}'. Skipping.")
+                  continue
              # Additional security checks
              if not isinstance(filename, str) or ".." in filename or filename.startswith("/") or filename.startswith("\\"):
                  logger.warning(f"Skipping potentially unsafe or invalid resource file name: {filename}")
@@ -265,12 +323,13 @@ class QueryAnalyzer:
 
                  if filepath.exists() and filepath.is_file():
                      try:
-                         with open(filepath, 'r', encoding='utf-8') as f:
-                             content = f.read()
-                             # Add headers clearly marking content source
-                             content_parts.append(f"\n--- START CONTEXT FILE: {filename} ---\n")
-                             content_parts.append(content)
-                             content_parts.append(f"\n--- END CONTEXT FILE: {filename} ---\n")
+                         # --- Use read_manuscript_file for all types now ---
+                         # It handles .md and .txt correctly
+                         content = read_manuscript_file(str(filepath))
+                         
+                         content_parts.append(f"\n--- START CONTEXT FILE: {filename} ---\n")
+                         content_parts.append(content)
+                         content_parts.append(f"\n--- END CONTEXT FILE: {filename} ---\n")
                      except Exception as e:
                          logger.error(f"Error reading resource file {filepath}: {e}")
                  else:
@@ -324,24 +383,40 @@ if __name__ == '__main__':
 
         # Define paths (adjust if your structure differs)
         script_dir = Path(__file__).resolve().parent.parent # Should be src/george
-        example_kb_path = script_dir.parent / "data" / "uploads" / "projects" / "EAWAN_txt" / "knowledge_base"
+        example_project_path = script_dir.parent / "data" / "uploads" / "projects" / "EAWAN_txt" # Root project path
         example_help_path = script_dir / "app_help_docs"
 
-        # Create dummy help file if it doesn't exist
+        # Create dummy manuscript if it doesn't exist in the project root
+        manuscript_file = example_project_path / "EAWAN.md" # Assuming we want .md
+        if not manuscript_file.exists():
+             # Try to find EAWAN.txt and copy/convert it
+             txt_file = script_dir.parent / "data" / "uploads" / "EAWAN.txt"
+             if txt_file.exists():
+                  with open(txt_file, 'r', encoding='utf-8') as f_in, open(manuscript_file, 'w', encoding='utf-8') as f_out:
+                       f_out.write(f_in.read())
+                  logger.info(f"Created dummy manuscript {manuscript_file.name} from {txt_file.name}")
+             else:
+                  with open(manuscript_file, "w", encoding='utf-8') as f:
+                       f.write("# Sample Manuscript\n\nThis is the main text.")
+                  logger.info(f"Created dummy manuscript {manuscript_file.name}")
+                  
+        # Ensure help dir exists
         example_help_path.mkdir(parents=True, exist_ok=True)
-        help_file = example_help_path / "help_general.md" # Name should match router's expectation if specific
+        help_file = example_help_path / "help_general.md" 
         if not help_file.exists():
             with open(help_file, "w", encoding='utf-8') as f:
                 f.write("# General Application Help\n\nThis is where you find help about using George.")
 
-        analyzer = QueryAnalyzer(ai_router_instance, str(example_kb_path), str(example_help_path))
+        # --- Pass the root project path to QueryAnalyzer ---
+        analyzer = QueryAnalyzer(ai_router_instance, str(example_project_path), str(example_help_path))
 
         test_queries = [
-            "What is Hugh's personality like?",
-            "How do I create a new project?",
-            "Add a note to Linda's file: She seems conflicted.",
-            "Thanks!",
-            "Who paid for Edie Ann's Net?"
+            "What is Hugh's personality like?", # Should use KB file
+            "Analyze the pacing of the manuscript.", # Should request manuscript file
+            "How do I create a new project?", # Should use help file
+            "Add a note to Linda's file: She seems conflicted.", # Should request KB file
+            "Thanks!", # No resources
+            "Who paid for Edie Ann's Net?" # Should use KB file
         ]
 
         for query in test_queries:

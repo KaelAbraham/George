@@ -1,13 +1,1 @@
-# Set your OpenAI API key here
-# Get your API key from: https://platform.openai.com/api-keys
-
-# For PowerShell, run this command (replace YOUR_KEY_HERE with your actual key):
-# $env:OPENAI_API_KEY = "YOUR_KEY_HERE"
-
-# For permanent setup, add to your PowerShell profile:
-# notepad $PROFILE
-# Then add: $env:OPENAI_API_KEY = "YOUR_KEY_HERE"
-
-# If using Anthropic Claude instead:
-# $env:ANTHROPIC_API_KEY = "YOUR_KEY_HERE"
-# And change api_type in app_simple.py to "anthropic"
+AIzaSyBGgdUAXs9UKp1CfP_31WzfPQkJ-ju_Jxw

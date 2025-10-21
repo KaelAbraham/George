@@ -17,7 +17,8 @@ os.chdir(project_root)
 # Import and run the main Flask app (no longer app_simple)
 if __name__ == '__main__':
     try:
-        from src.george.ui.app import app
+        from george.ui.app import create_app
+        app = create_app()
         print("Starting George Flask application...")
         print("Open your browser to: http://localhost:5000")
         print("Press Ctrl+C to stop the server.")
