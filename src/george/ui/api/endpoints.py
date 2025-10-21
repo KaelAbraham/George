@@ -1,106 +1,59 @@
-"""API endpoints for George application."""
-from flask import Blueprint, jsonify, request, session
-import logging
+from flask import Blueprint, jsonify, request
+from ..auth.auth_client import verify_firebase_token
+from ...knowledge_extraction.orchestrator import KnowledgeExtractor
+from ...llm_integration import create_george_ai
 import os
-import sys
 
-# Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+api_bp = Blueprint('api', __name__, url_prefix='/api')
 
-logger = logging.getLogger(__name__)
-
-api_bp = Blueprint('api', __name__)
-
-@api_bp.route('/projects/<project_id>/candidates')
-def get_candidates(project_id):
-    """Get entity candidates for a project."""
-    try:
-        # For now, return mock data - in a real implementation this would
-        # load from the knowledge base or process the uploaded file
-        candidates = [
-            {
-                "id": 1,
-                "text": "Elias",
-                "type": "PERSON",
-                "confidence": 0.95,
-                "context": "Elias the blacksmith, his hands calloused and his back aching from the forge",
-                "approved": None
-            },
-            {
-                "id": 2,
-                "text": "Lyra", 
-                "type": "PERSON",
-                "confidence": 0.92,
-                "context": "Lyra the scholar, surrounded by dusty scrolls and the silent weight of history",
-                "approved": None
-            },
-            {
-                "id": 3,
-                "text": "Finn",
-                "type": "PERSON", 
-                "confidence": 0.89,
-                "context": "Finn the minstrel was tired of the fickle crowds and the meager coin",
-                "approved": None
-            },
-            {
-                "id": 4,
-                "text": "the woods",
-                "type": "LOCATION",
-                "confidence": 0.78,
-                "context": "in a part of the woods they had never explored",
-                "approved": None
-            }
-        ]
-        return jsonify(candidates)
-    except Exception as e:
-        logger.error(f"Error getting candidates: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@api_bp.route('/projects/<project_id>/candidates/<int:candidate_id>', methods=['POST'])
-def update_candidate(project_id, candidate_id):
-    """Update candidate approval status."""
-    try:
-        data = request.get_json()
-        approved = data.get('approved')
+# --- Helper function to "Georgeify" the response ---
+def georgeify_response(raw_text, sources=[]):
+    """Formats a raw AI response into George's voice."""
+    # This is a simple implementation of the "Georgeification" layer.
+    # It can be made more sophisticated later.
+    
+    # Basic tone consistency checks
+    raw_text = raw_text.replace("I think", "The text suggests")
+    raw_text = raw_text.replace("In my opinion", "Based on the manuscript")
+    
+    formatted_response = f"Here is the information based on your manuscript:\n\n- {raw_text}"
+    
+    if sources:
+        source_list = ", ".join(sources)
+        formatted_response += f"\n\n[Sources: {source_list}]"
         
-        # In a real implementation, this would update the database
-        logger.info(f"Candidate {candidate_id} {'approved' if approved else 'rejected'}")
-        
-        return jsonify({"success": True})
-    except Exception as e:
-        logger.error(f"Error updating candidate: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@api_bp.route('/projects/<project_id>/finalize', methods=['POST'])
-def finalize_project(project_id):
-    """Finalize the project and build knowledge base."""
-    try:
-        # In a real implementation, this would:
-        # 1. Get approved entities
-        # 2. Build the knowledge base
-        # 3. Set up the project for chat
-        
-        logger.info(f"Finalizing project {project_id}")
-        return jsonify({"success": True, "message": "Knowledge base built successfully"})
-    except Exception as e:
-        logger.error(f"Error finalizing project: {e}")
-        return jsonify({"error": str(e)}), 500
+    return formatted_response
 
 @api_bp.route('/projects/<project_id>/chat', methods=['POST'])
-def chat_message(project_id):
-    """Handle chat messages."""
+@verify_firebase_token()
+def project_chat(project_id):
+    """Handles a chat message for a specific project."""
+    data = request.get_json()
+    question = data.get('question')
+
+    if not question:
+        return jsonify({"error": "No question provided"}), 400
+
     try:
-        data = request.get_json()
-        message = data.get('message', '')
+        # --- This is the full, intelligent workflow ---
         
-        # Simple mock response - in real implementation this would
-        # query the knowledge base and generate AI responses
-        response = f"I understand you're asking about: '{message}'. Based on your story about Elias, Lyra, and Finn, I can help you explore their character development and the magical elements of your world."
-        
-        return jsonify({
-            "response": response,
-            "sources": ["Your manuscript: Elias.txt"]
-        })
+        # 1. Initialize the AI and Knowledge Extractor for this project
+        # In a real app, you would manage these instances more globally
+        project_path = os.path.join("src/data/uploads/projects", project_id)
+        george_ai = create_george_ai(model="phi3:mini:instruct") # Using your preferred fast model
+        extractor = KnowledgeExtractor(george_ai, project_path)
+
+        # 2. Let the orchestrator handle the query (Intent, Retrieval, Generation)
+        result = extractor.answer_query(question)
+
+        if result['success']:
+            # 3. Apply the "Georgeification" Layer
+            final_answer = georgeify_response(result['response'], sources=[f"{project_id} knowledge base"])
+            return jsonify({"answer": final_answer})
+        else:
+            return jsonify({"error": result.get('error', 'An unknown error occurred')}), 500
+
     except Exception as e:
-        logger.error(f"Error in chat: {e}")
         return jsonify({"error": str(e)}), 500
+
+# You can remove the old mock routes if you wish, or keep them for other testing.
