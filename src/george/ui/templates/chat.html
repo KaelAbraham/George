@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chat with George - AI Writing Assistant</title>
+    <title>Chat - {{ project.name }} - George AI</title>
     <style>
         body { 
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
@@ -12,28 +12,49 @@
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
         }
-        .nav-bar {
-            background: rgba(0,0,0,0.1);
-            padding: 10px 20px;
+        
+        /* --- NEW: Styles for chat header --- */
+        .chat-header {
+            background-color: #333;
+            color: white;
+            padding: 15px 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            border-bottom: 1px solid #444;
         }
-        .nav-bar a {
+        .chat-header h1 {
+            margin: 0;
+            font-size: 1.4em;
             color: white;
+        }
+        .file-list {
+            font-size: 0.85em;
+            color: #ccc;
+            margin-top: 5px;
+        }
+        .file-list ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            gap: 15px;
+        }
+        .file-list li {
+            background-color: #555;
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+        .nav-actions a {
+            color: #ddd;
             text-decoration: none;
-            margin: 0 15px;
-            padding: 8px 16px;
-            border-radius: 5px;
-            transition: background 0.3s;
+            margin-left: 15px;
+            font-size: 0.9em;
         }
-        .nav-bar a:hover {
-            background: rgba(255,255,255,0.2);
+        .nav-actions a:hover {
+            color: white;
         }
-        .nav-bar .logo {
-            font-size: 1.2em;
-            font-weight: bold;
-        }
+        /* --- END NEW --- */
         #chat-container { 
             max-width: 900px; 
             height: 75vh; 
@@ -186,30 +207,35 @@
 </head>
 <body>
 
-<div class="nav-bar">
-    <div class="logo">🤖 George AI</div>
+{# --- NEW: Chat Header Section --- #}
+<div class="chat-header">
     <div>
-        <a href="/">Home</a>
-        <a href="/upload">Upload</a>
-        <a href="/chat" style="background: rgba(255,255,255,0.2);">Chat</a>
+        <h1>{{ project.name }}</h1>
+        <div class="file-list">
+            <span>Manuscript Files:</span>
+            {% if project.manuscript_files %}
+                <ul>
+                    {% for filename in project.manuscript_files %}
+                        <li>{{ filename }}</li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <span>No manuscript files uploaded yet.</span>
+            {% endif %}
+        </div>
+    </div>
+    <div class="nav-actions">
+        <a href="{{ url_for('project_manager.view_project', project_id=project.id) }}">Manage Files</a>
+        <a href="{{ url_for('project_manager.dashboard') }}">Back to Dashboard</a>
     </div>
 </div>
+{# --- END NEW --- #}
 
 <div id="chat-container">
     <div id="chat-header">
         <h1>🤖 George AI Assistant</h1>
         <div id="ai-status">
-            <span id="status-indicator">Connecting to AI...</span>
-            <div class="model-info" id="model-info"></div>
-        </div>
-                <div id="file-status" style="margin-bottom: 10px; padding: 10px; background: rgba(255,255,255,0.1); border-radius: 5px;">
-            <span id="file-indicator">📄 Checking file status...</span>
-            <button id="clear-file-btn" onclick="clearCurrentFile()" style="margin-left: 5px; padding: 4px 8px; background: rgba(255,0,0,0.2); border: 1px solid rgba(255,0,0,0.3); border-radius: 3px; color: white; cursor: pointer; font-size: 0.8em; display: none;">Clear File</button>
-            <button onclick="checkFileStatus()" style="margin-left: 5px; padding: 4px 8px; background: rgba(0,123,255,0.2); border: 1px solid rgba(0,123,255,0.3); border-radius: 3px; color: white; cursor: pointer; font-size: 0.8em;">Refresh Status</button>
-        </div>
-        <div id="processing-status" style="margin-bottom: 10px; padding: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; display: none;">
-            <span id="processing-indicator">⚙️ Processing manuscript...</span>
-            <div id="processing-progress" style="margin-top: 5px; font-size: 0.8em;"></div>
+            <span id="status-indicator">Ready to chat</span>
         </div>
     </div>
     <div id="messages">
