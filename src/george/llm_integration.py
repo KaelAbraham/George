@@ -1,238 +1,229 @@
-"""
-LLM Integration Module for George - Multi-LLM Support (Ollama, OpenAI, Anthropic, etc.)
-This version implements a tiered, multi-client routing system for Gemini models.
-"""
-import json
-import logging
-import requests
 import os
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
+import sys
+from pathlib import Path
+import google.generativeai as genai
+import ollama
+import logging
+from dotenv import load_dotenv
+from typing import Dict # Added for type hinting
 
+# Add parent to path if needed to find local modules
+current_dir = Path(__file__).parent
+george_dir = current_dir # Assuming llm_integration is directly in src/george
+if str(george_dir) not in sys.path:
+    sys.path.insert(0, str(george_dir))
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-@dataclass
-class ChatMessage:
-    """Represents a chat message."""
-    role: str  # 'user', 'assistant', 'system'
-    content: str
-    timestamp: Optional[str] = None
+# Load environment variables (like API key)
+load_dotenv()
 
-class CloudAPIClient:
-    """Client for cloud-based LLM APIs, primarily focused on Google Gemini."""
-    
-    def __init__(self, api_key: str, model: str, api_base: str = "https://generativelanguage.googleapis.com/v1beta"):
-        """
-        Initialize cloud API client for a specific Gemini model.
-        """
-        self.model = model
-        self.api_base = api_base
-        
-        if not api_key:
-            raise ValueError("A Google AI API key is required.")
-        
-        self.api_key = api_key
-        self.session = requests.Session()
-        self.session.headers.update({"Content-Type": "application/json"})
-    
-    def is_available(self) -> bool:
-        """Check if the API key is set."""
-        return bool(self.api_key)
-    
-    def generate_response(self, prompt: str, system_prompt: str = None, temperature: float = 0.7) -> str:
-        """Generate a response using the configured Gemini model."""
-        url = f"{self.api_base}/models/{self.model}:generateContent?key={self.api_key}"
-        
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": temperature,
-                "maxOutputTokens": 2048,
-            }
-        }
-        if system_prompt:
-            payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
-
-        try:
-            response = self.session.post(url, json=payload, timeout=120)
-            response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
-            result = response.json()
-            return result["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed for model {self.model}: {e}")
-            raise Exception(f"API Error with {self.model}: {e}")
-        except (KeyError, IndexError) as e:
-            logger.error(f"Unexpected API response structure for model {self.model}: {response.text}")
-            raise Exception(f"Invalid response from {self.model}: {e}")
-
-class AIRouter:
-    """
-    Intelligently routes user queries to the appropriate Gemini model tier
-    based on complexity and context requirements.
-    """
-    def __init__(self, api_key: str):
-        if not api_key:
-            raise ValueError("API key is essential for the AI Router to function.")
-            
-        self.triage_client = CloudAPIClient(api_key=api_key, model="gemini-2.0-flash-lite")
-        self.standard_client = CloudAPIClient(api_key=api_key, model="gemini-2.0-flash")
-        self.pro_client = CloudAPIClient(api_key=api_key, model="gemini-2.5-pro")
-
-    def triage_query(self, user_question: str) -> Dict[str, Any]:
-        """
-        Uses the fastest model to classify the query's complexity and context needs.
-        """
-        system_prompt = """You are a request triage agent. Analyze the user's question and determine two things:
-1.  **complexity**: Classify the request as 'simple_lookup' (e.g., "who is Sarah?"), 'complex_analysis' (e.g., "compare Sarah's motivations to John's"), or 'creative_task' (e.g., "write a poem about their meeting").
-2.  **needs_memory**: Determine if the question relies on unspoken context from the previous turn of conversation (e.g., using pronouns like "he", "she", "that", "it").
-
-Respond with ONLY a valid JSON object in the format: {"complexity": "...", "needs_memory": boolean}"""
-
-        try:
-            response_text = self.triage_client.generate_response(user_question, system_prompt, temperature=0.0)
-            return json.loads(response_text)
-        except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"Triage failed: {e}. Defaulting to complex analysis.")
-            return {"complexity": "complex_analysis", "needs_memory": True} # Default safely
-
-    def execute_and_polish(self, user_question: str, context: str, triage_result: Dict) -> Dict:
-        """Routes to the correct model, gets a response, and polishes it."""
-        complexity = triage_result.get("complexity", "complex_analysis")
-
-        # 1. Select the appropriate client for execution
-        if complexity == 'simple_lookup':
-            execution_client = self.standard_client # Use Flash for simple lookups for quality
-        else: # complex_analysis or creative_task
-            execution_client = self.pro_client
-
-        # 2. Generate the main, factual response
-        main_prompt = f"Based on the following context, answer the user's question.\n\nContext:\n{context}\n\nQuestion:\n{user_question}"
-        model_used = execution_client.model
-        fallback_note = None
-
-        try:
-            main_response = execution_client.generate_response(
-                main_prompt,
-                system_prompt="You are a helpful AI assistant. Provide a direct, factual answer based on the context provided.",
-            )
-        except Exception as primary_error:
-            logger.warning(
-                "Primary model %s failed during execution: %s",
-                execution_client.model,
-                primary_error,
-            )
-
-            fallback_client = None
-            if execution_client is self.pro_client:
-                fallback_client = self.standard_client
-            elif execution_client is self.standard_client:
-                fallback_client = self.triage_client
-
-            if fallback_client is None:
-                raise
-
-            try:
-                main_response = fallback_client.generate_response(
-                    main_prompt,
-                    system_prompt="You are a helpful AI assistant. Provide a direct, factual answer based on the context provided.",
-                )
-                model_used = fallback_client.model
-                fallback_note = f"primary_failed:{execution_client.model}"
-                logger.info(
-                    "Fallback model %s succeeded after %s failure",
-                    fallback_client.model,
-                    execution_client.model,
-                )
-            except Exception as secondary_error:
-                logger.error(
-                    "Fallback model %s also failed after %s: %s",
-                    fallback_client.model,
-                    execution_client.model,
-                    secondary_error,
-                )
-                raise RuntimeError(
-                    f"Primary model {execution_client.model} failed: {primary_error}; fallback {fallback_client.model} failed: {secondary_error}"
-                ) from secondary_error
-
-        # 3. "Georgeification" Layer: Polish the response for tone
-        polish_prompt = f"Rephrase the following answer to have a natural, conversational, and friendly tone, as if you are 'George', an AI writing assistant. Do not add any new information. Answer:\n\n{main_response}"
-        polish_model = self.standard_client.model
-
-        try:
-            final_response = self.standard_client.generate_response(polish_prompt, temperature=0.7)
-        except Exception as polish_error:
-            logger.warning(
-                "Polish model %s failed: %s. Returning unpolished response.",
-                self.standard_client.model,
-                polish_error,
-            )
-            final_response = main_response
-            polish_model = model_used
-
-        return {
-            "response": final_response,
-            "model": model_used,  # Report the model that did the heavy lifting (or fallback)
-            "polish_model": polish_model,
-            "fallback_info": fallback_note,
-        }
+# --- NEW: Default timeout in seconds for AI calls ---
+DEFAULT_TIMEOUT = 30 
 
 class GeorgeAI:
-    """Main AI interface for George application, now with routing."""
-    
-    def __init__(self, use_cloud: bool = True, api_key: str = None, api_type: str = "gemini"):
-        if not use_cloud or api_type != "gemini":
-            raise NotImplementedError("This version is optimized for the Gemini cloud API router.")
-        
-        # Resolve API key once - use provided key or fallback to environment variable
-        resolved_api_key = api_key or os.getenv("GEMINI_API_KEY")
-        
-        self.router = AIRouter(api_key=resolved_api_key)
-        self.knowledge_client = CloudAPIClient(api_key=resolved_api_key, model="gemini-2.5-pro")
-        self.conversation_history: List[ChatMessage] = []
-        
-    def is_available(self) -> bool:
-        """Check if AI services are available."""
-        return self.router.triage_client.is_available()
+    """Handles interactions with different LLM backends (local Ollama or cloud Gemini)."""
 
-    def chat(self, message: str, project_context: str = "") -> Dict[str, Any]:
-        """Processes a chat message using the full routing and polishing pipeline."""
+    def __init__(self, model: str = "phi3:mini:instruct", use_cloud: bool = False):
+        """
+        Initialize the AI client.
+
+        Args:
+            model (str): Name of the model to use (Ollama model name or Gemini model name).
+            use_cloud (bool): If True, use Google Gemini API; otherwise, use local Ollama.
+        """
+        self.model = model
+        self.use_cloud = use_cloud
+        self.gemini_model = None
+
+        if use_cloud:
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                logger.error("❌ GEMINI_API_KEY not found in environment variables.")
+                # Allow initialization but Gemini calls will fail
+            else:
+                try:
+                    genai.configure(api_key=api_key)
+                    self.gemini_model = genai.GenerativeModel(model)
+                    logger.info(f"☁️ Configured Google Gemini with model: {model}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to configure Google Gemini: {e}")
+        else:
+            try:
+                # Check if Ollama service is running by listing local models
+                ollama.list()
+                logger.info(f"🤖 Configured local Ollama with model: {model}")
+                # You might want to add a check here if self.model actually exists locally
+            except Exception as e:
+                logger.error(f"❌ Failed to connect to local Ollama service. Is it running? Error: {e}")
+                # Allow initialization but Ollama calls will fail
+
+
+    def chat(self, prompt: str, project_context: str = "", temperature: float = 0.7, timeout: int = DEFAULT_TIMEOUT) -> Dict:
+        """
+        Main chat method, routes to appropriate backend based on configuration.
+
+        Args:
+            prompt (str): The main user prompt or system instruction.
+            project_context (str): Specific context from the project knowledge base.
+            temperature (float): Controls randomness in generation.
+            timeout (int): Maximum time in seconds to wait for a response.
+
+        Returns:
+            Dict: {'success': bool, 'response': str, 'error': str (if !success)}
+        """
+        # Combine prompt and context carefully
+        full_prompt = prompt # Start with system prompt or main query
+        if project_context:
+             full_prompt += f"\n\n--- Start Context ---\n{project_context}\n--- End Context ---"
+        #logger.debug(f"Full prompt being sent:\n{full_prompt[:500]}...") # Log beginning of prompt
+
         try:
-            # 1. Triage the query
-            triage_result = self.router.triage_query(message)
-
-            # 2. Gather resources
-            context_parts = [project_context]
-            if triage_result.get("needs_memory", False) and self.conversation_history:
-                # Add last 3 exchanges (simplified for this example)
-                recent_history = "\n".join([f"{msg.role}: {msg.content}" for msg in self.conversation_history[-3:]])
-                context_parts.append(f"Recent Conversation History:\n{recent_history}")
-            
-            full_context = "\n\n".join(context_parts)
-
-            # 3. Execute the routed query and get a polished response
-            result = self.router.execute_and_polish(message, full_context, triage_result)
-
-            # 4. Update history
-            self.conversation_history.append(ChatMessage(role="user", content=message))
-            self.conversation_history.append(ChatMessage(role="assistant", content=result['response']))
-            
-            return {
-                "response": result['response'],
-                "model": result['model'],
-                "success": True
-            }
+            if self.use_cloud:
+                if not self.gemini_model:
+                     return {'success': False, 'response': None, 'error': "Gemini client not initialized. Check API key."}
+                return self._chat_with_gemini(full_prompt, temperature, timeout)
+            else:
+                # Add check if ollama connection failed during init
+                return self._chat_with_ollama(full_prompt, temperature, timeout)
         except Exception as e:
-            logger.error(f"Error in chat processing: {e}")
-            return {"response": f"Sorry, I encountered an error: {e}", "success": False}
+            logger.error(f"❌ Unexpected error in chat method: {e}", exc_info=True)
+            return {'success': False, 'response': None, 'error': f"Unexpected error: {e}"}
 
-    def get_knowledge_client(self) -> CloudAPIClient:
-        """Provides direct access to the powerful Pro client for high-value tasks."""
-        return self.knowledge_client
 
-    def clear_history(self):
-        """Clear conversation history."""
-        self.conversation_history = []
+    def _chat_with_ollama(self, prompt: str, temperature: float, timeout: int) -> Dict:
+        """Sends a prompt to the configured local Ollama model."""
+        # Note: Ollama library doesn't seem to support timeout directly in ollama.chat
+        # We'll log a warning if the provided timeout isn't the default.
+        if timeout != DEFAULT_TIMEOUT:
+             logger.warning("Ollama API call does not directly support a custom timeout parameter via this library method.")
 
-def create_george_ai(api_key: str = None, api_type: str = "gemini") -> GeorgeAI:
-    """Factory function to create a GeorgeAI instance with the routing logic."""
-    return GeorgeAI(use_cloud=True, api_key=api_key, api_type=api_type)
+        try:
+            logger.info(f"🤖 Calling local Ollama model: {self.model}")
+            response = ollama.chat(
+                model=self.model,
+                messages=[{'role': 'user', 'content': prompt}],
+                options={'temperature': temperature},
+            )
+            # Check for empty response content
+            if not response or 'message' not in response or 'content' not in response['message']:
+                 logger.error("❌ Ollama response structure invalid or content missing.")
+                 return {'success': False, 'response': None, 'error': "Invalid or empty response from Ollama."}
+
+            logger.info("  Ollama call successful.")
+            return {'success': True, 'response': response['message']['content'], 'error': None}
+        except Exception as e:
+            logger.error(f"❌ Error calling Ollama: {e}", exc_info=True)
+            return {'success': False, 'response': None, 'error': f"Ollama API call failed: {e}"}
+
+    def _chat_with_gemini(self, prompt: str, temperature: float, timeout: int) -> Dict:
+        """Sends a prompt to the configured Google Gemini model."""
+        if not self.gemini_model:
+            # This check is technically redundant due to the check in chat(), but good practice
+            return {'success': False, 'response': None, 'error': "Gemini client not initialized."}
+
+        try:
+            logger.info(f"☁️ Calling Google Gemini model: {self.model} with timeout {timeout}s")
+            # Use request_options for timeout
+            response = self.gemini_model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(temperature=temperature),
+                request_options={'timeout': timeout} # Pass timeout here
+            )
+
+            # --- Improved Safety Handling ---
+            if not response.candidates:
+                 block_reason = "Unknown safety block"
+                 finish_reason = "Unknown finish reason"
+                 try:
+                     # Attempt to get more specific reasons if available
+                     if hasattr(response, 'prompt_feedback') and hasattr(response.prompt_feedback, 'block_reason'):
+                         block_reason = response.prompt_feedback.block_reason.name
+                     # Sometimes the block reason is in the candidate's finish_reason
+                     # (Need to access internal _result, which is fragile)
+                     # Let's rely on prompt_feedback for now.
+                 except Exception as fb_e:
+                     logger.warning(f"Could not parse detailed block reason: {fb_e}")
+
+                 logger.warning(f"  Gemini call potentially blocked. Block Reason: {block_reason}. Finish Reason: {finish_reason}")
+                 # You might want to customize this error based on the reason
+                 return {'success': False, 'response': None, 'error': f"Content generation failed or was blocked by safety settings ({block_reason})."}
+
+            # Check candidate content (response.text is a shortcut but might raise)
+            candidate_text = ""
+            try:
+                candidate_text = response.text # Use the safe shortcut if possible
+            except ValueError:
+                 logger.warning("  Gemini response candidate has no text content (potentially due to safety block on output).")
+                 # Try to get finish reason from the candidate itself
+                 finish_reason = "Unknown"
+                 try:
+                     if response.candidates[0].finish_reason:
+                         finish_reason = response.candidates[0].finish_reason.name
+                 except Exception:
+                     pass
+                 return {'success': False, 'response': None, 'error': f"Content generation failed ({finish_reason})."}
+            except Exception as text_e:
+                 logger.error(f"  Error accessing Gemini response text: {text_e}")
+                 return {'success': False, 'response': None, 'error': f"Error accessing response text: {text_e}"}
+
+            logger.info("  Gemini call successful.")
+            return {'success': True, 'response': candidate_text, 'error': None}
+
+        except Exception as e:
+            # Catch potential timeout errors specifically if the library surfaces them
+            # (Note: google-generativeai might wrap timeouts in a more generic error)
+            error_str = str(e)
+            if "Timeout" in error_str or "deadline exceeded" in error_str.lower():
+                 logger.error(f"❌ Gemini API call timed out after {timeout} seconds: {e}")
+                 return {'success': False, 'response': None, 'error': f"Gemini API call timed out ({timeout}s)."}
+            else:
+                 logger.error(f"❌ Error calling Gemini: {e}", exc_info=True)
+                 return {'success': False, 'response': None, 'error': f"Gemini API call failed: {e}"}
+
+
+def create_george_ai(model: str = "phi3:mini:instruct", use_cloud: bool = False) -> GeorgeAI:
+    """Factory function to create an instance of GeorgeAI."""
+    # Determine model and cloud usage based on simple logic for now
+    # In production, this might read from a config file
+    
+    # Map friendly names to actual model IDs if needed
+    if model.lower() == "gemini-pro":
+        model_id = "gemini-1.0-pro" # Or the latest appropriate ID
+        use_cloud = True
+    elif model.lower() == "gemini-flash-lite":
+        model_id = "gemini-1.5-flash-latest" # Or specific version like gemini-2.0-flash-lite
+        use_cloud = True
+    elif model.lower() == "gemini-2.5-pro":
+        model_id = "gemini-2.5-pro-latest" # Or specific version
+        use_cloud = True
+    else: # Assume it's an Ollama model
+        model_id = model
+        use_cloud = False
+        
+    logger.info(f"Creating GeorgeAI instance: Model='{model_id}', Cloud={use_cloud}")
+    return GeorgeAI(model=model_id, use_cloud=use_cloud)
+
+# Example usage
+if __name__ == '__main__':
+    # Test Ollama (make sure Ollama service is running)
+    print("\n--- Testing Ollama ---")
+    try:
+        ollama_ai = create_george_ai(model="phi3:mini:instruct", use_cloud=False)
+        # Test with a short timeout (Ollama might ignore it, but we test the flow)
+        result_ollama = ollama_ai.chat("Explain quantum physics in one sentence.", timeout=5) 
+        print(f"Ollama Result: {result_ollama}")
+    except Exception as e:
+        print(f"Ollama test failed: {e}")
+
+    # Test Gemini (requires GEMINI_API_KEY in .env file or environment)
+    print("\n--- Testing Gemini ---")
+    try:
+        gemini_ai = create_george_ai(model="gemini-flash-lite", use_cloud=True) # Use Flash Lite for testing
+        # Test with a specific timeout
+        result_gemini = gemini_ai.chat("Explain classical mechanics in one sentence.", timeout=10) 
+        print(f"Gemini Result: {result_gemini}")
+    except Exception as e:
+        print(f"Gemini test failed: {e}")
