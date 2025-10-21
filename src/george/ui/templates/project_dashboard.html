@@ -116,10 +116,24 @@
     </div>
 
     <script type="module">
-        // Import only necessary functions
+        // Import Firebase modules
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getAuth, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 
-        const auth = getAuth();
+        // Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyDXtKsm3KwmBIQnrhzjJtEo-MvlfgLAn34",
+            authDomain: "george-6a8da.firebaseapp.com",
+            projectId: "george-6a8da",
+            storageBucket: "george-6a8da.firebasestorage.app",
+            messagingSenderId: "927164112653",
+            appId: "1:927164112653:web:fa22500beaeebaccd49a44",
+            measurementId: "G-RQLXB7BBHR"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
 
         // Logout Button Handler
         const logoutBtn = document.getElementById('logout-btn');
