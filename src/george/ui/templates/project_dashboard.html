@@ -19,6 +19,17 @@
         .status-ready { background: #d4edda; color: #155724; }
         .status-error { background: #f8d7da; color: #721c24; }
         .new-project-btn { background: #007bff; color: white; padding: 12px 20px; text-decoration: none; border-radius: 5px; }
+        .btn { padding: 8px 12px; border-radius: 5px; border: none; cursor: pointer; font-size: 0.9em; margin-right: 10px; }
+        .btn-chat { background: #28a745; color: white; text-decoration: none; display: inline-block; }
+        .btn-view { background: #007bff; color: white; text-decoration: none; display: inline-block; }
+        .generate-kb-btn { background: #17a2b8; color: white; }
+        .generate-kb-btn:disabled { background: #6c757d; cursor: not-allowed; }
+        .add-files-btn { background: #ffc107; color: #333; }
+        .add-files-btn:disabled { background: #e0e0e0; cursor: not-allowed; }
+        .kb-actions { margin-top: 15px; }
+        .kb-status { margin-left: 10px; font-style: italic; }
+        .action-links { margin-top: 10px; }
+        .unavailable-text { color: #999; margin-right: 10px; }
     </style>
 </head>
 <body>
@@ -52,9 +63,34 @@
                             {% endif %}
                         </div>
                         <p>{{ project.description or 'No description' }}</p>
-                        <div>
-                            <a href="/projects/{{ project.id }}">View Project</a> | 
-                            <a href="/projects/{{ project.id }}/chat/">Open Chat</a>
+                        
+                        {# --- Action Links --- #}
+                        <div class="action-links">
+                            <a href="/projects/{{ project.id }}" class="btn btn-view">View Project</a>
+                            
+                            {% if project.processing_status == 'ready' %}
+                                {# Only show chat link if KB is ready #}
+                                <a href="/projects/{{ project.id }}/chat/" class="btn btn-chat">Open Chat</a>
+                            {% else %}
+                                <span class="unavailable-text">Chat unavailable until KB is generated</span>
+                            {% endif %}
+                        </div>
+                        
+                        {# --- Dynamic KB Action Button --- #}
+                        <div class="kb-actions">
+                            {% if project.processing_status == 'created' or project.processing_status == 'error' or not project.processing_status %}
+                                {# Show Generate button if KB not generated or if there was an error #}
+                                <button class="btn generate-kb-btn">Generate Knowledge Base</button>
+                            {% elif project.processing_status == 'processing' %}
+                                <button class="btn generate-kb-btn" disabled>Processing KB...</button>
+                            {% elif project.processing_status == 'ready' %}
+                                {# KB is generated, show Add Files button (functionality TBD) #}
+                                <button class="btn add-files-btn" disabled title="Add Files functionality coming soon">Add Files to KB</button>
+                            {% else %}
+                                {# Default fallback #}
+                                <button class="btn generate-kb-btn">Generate Knowledge Base</button>
+                            {% endif %}
+                            <span class="kb-status"></span>
                         </div>
                     </div>
                 {% endfor %}
@@ -103,8 +139,11 @@
                 }
 
                 try {
+                    // URL encode the project ID to handle spaces and special characters
+                    const encodedProjectId = encodeURIComponent(projectId);
+                    
                     // Call the API endpoint to start processing
-                    const response = await fetch(`/api/projects/${projectId}/process`, {
+                    const response = await fetch(`/api/projects/${encodedProjectId}/process`, {
                         method: 'POST',
                         headers: {
                             'Authorization': 'Bearer ' + idToken,
@@ -121,9 +160,11 @@
                     const data = await response.json();
 
                     if (response.ok && data.status === 'success') {
-                        statusSpan.textContent = `Processing complete! ${data.message || ''}`;
+                        statusSpan.textContent = `Complete! ${data.message || ''}`;
                         statusSpan.style.color = 'green';
-                        clickedButton.textContent = 'KB Generated (Refresh Page)';
+                        clickedButton.textContent = 'KB Generated';
+                        // Optionally reload the page to show updated status
+                        setTimeout(() => location.reload(), 2000);
                     } else {
                         statusSpan.textContent = `Error: ${data.error || 'Unknown error'}`;
                         statusSpan.style.color = 'red';
