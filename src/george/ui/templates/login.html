@@ -55,17 +55,29 @@
                 // Get the ID token from the signed-in user
                 const idToken = await user.getIdToken();
                 
-                // Store the token securely in localStorage for future requests
+                // Store the token securely in localStorage for API requests
                 localStorage.setItem('firebaseIdToken', idToken);
                 
-                console.log('Login successful:', user);
-                alert(`Welcome, ${user.displayName || user.email}!`);
-                
-                // Redirect to the main dashboard after successful login
-                window.location.href = '/dashboard';
+                // Also send the token to the server to establish a session
+                const response = await fetch('/auth/session', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + idToken
+                    },
+                    body: JSON.stringify({ idToken: idToken })
+                });
+
+                if (response.ok) {
+                    console.log('Login successful, session created');
+                    // Now redirect to the dashboard
+                    window.location.href = '/projects/';
+                } else {
+                    alert('Session creation failed. Please try again.');
+                }
             } catch (error) {
-                console.error('Error getting ID token:', error);
-                alert('Login successful but token retrieval failed.');
+                console.error('Error during login:', error);
+                alert('Login process failed. Please try again.');
             }
         }
 

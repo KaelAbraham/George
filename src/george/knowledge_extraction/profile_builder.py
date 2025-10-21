@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import List
 
-from ..llm_integration import CloudAPIClient
+from ..llm_integration import GeorgeAI
 from .entity_extractor import Entity
 
 logger = logging.getLogger(__name__)
@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class ProfileBuilder:
     """Builds detailed profiles for entities using a dedicated AI client."""
     
-    def __init__(self, ai_client: CloudAPIClient, knowledge_base_path: str):
+    def __init__(self, ai_client: GeorgeAI, knowledge_base_path: str):
         """
         Initialize profile builder.
         

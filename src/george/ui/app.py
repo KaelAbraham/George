@@ -51,13 +51,13 @@ def create_app():
     from .blueprints.auth import auth_bp
     from .blueprints.project_manager import project_bp
     from .blueprints.chat import chat_bp
-    # from .api.endpoints import api_bp # We will add this back later
+    from .api.endpoints import api_bp
 
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(project_bp)
     app.register_blueprint(chat_bp)
-    # app.register_blueprint(api_bp, url_prefix='/api')
+    app.register_blueprint(api_bp, url_prefix='/api')
 
     # --- Error Handlers ---
     @app.errorhandler(404)

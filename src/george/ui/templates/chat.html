@@ -257,15 +257,15 @@
 
             // 2. Send the request to the new project-specific, secure endpoint
             try {
-                const response = await fetch(`/api/chat`, {
+                const encodedProjectName = encodeURIComponent(projectName);
+                const response = await fetch(`/api/projects/${encodedProjectName}/chat`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'Authorization': 'Bearer ' + idToken // Send the token for authentication
                     },
                     body: JSON.stringify({ 
-                        question: question,
-                        project_name: projectName 
+                        question: question
                     })
                 });
 

@@ -23,9 +23,9 @@ class KnowledgeExtractor:
         self.kb_path = self.project_path / "knowledge_base"
         self.kb_path.mkdir(parents=True, exist_ok=True)
 
-        knowledge_client = self.ai.get_knowledge_client()
+        # Use the GeorgeAI instance directly for knowledge extraction
         self.extractor = EntityExtractor()
-        self.profile_builder = ProfileBuilder(knowledge_client, str(self.kb_path))
+        self.profile_builder = ProfileBuilder(self.ai, str(self.kb_path))
         self.query_analyzer = QueryAnalyzer(self.ai, str(self.kb_path))
 
         self.entities: Dict[str, object] = {}

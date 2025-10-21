@@ -1,27 +1,40 @@
 import firebase_admin
 from firebase_admin import credentials, auth
-from flask import request, jsonify, redirect, url_for, flash
+from flask import request, jsonify, redirect, url_for, flash, session
 from pathlib import Path
 
 # --- Initialize Firebase Admin SDK ---
 # Path to your Firebase service account key
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+# Navigate from src/george/ui/auth/ up to project root
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 CREDENTIALS_PATH = PROJECT_ROOT / "george-6a8da-firebase-adminsdk-fbsvc-e85c43d430.json"
 
 if not firebase_admin._apps:
+    if not CREDENTIALS_PATH.exists():
+        raise FileNotFoundError(f"Firebase credentials not found at {CREDENTIALS_PATH}")
     cred = credentials.Certificate(str(CREDENTIALS_PATH))
     firebase_admin.initialize_app(cred)
 # ---------------------------------------------
 
 def verify_firebase_token():
     """
-    Decorator to protect routes by verifying the Firebase ID token.
+    Decorator to protect routes by verifying the Firebase ID token or session.
     Redirects browsers to the login page and returns JSON for API clients.
     """
     def decorator(f):
         from functools import wraps
         @wraps(f)
         def wrapper(*args, **kwargs):
+            # First check if user has a valid session
+            if 'user_id' in session and 'user_email' in session:
+                # User has a valid session, populate request.user
+                request.user = {
+                    'uid': session['user_id'],
+                    'email': session['user_email']
+                }
+                return f(*args, **kwargs)
+            
+            # No session, check for Authorization header (for API calls)
             id_token = None
             if 'Authorization' in request.headers:
                 # The token is usually sent as "Bearer <token>"
@@ -54,13 +67,3 @@ def verify_firebase_token():
             return f(*args, **kwargs)
         return wrapper
     return decorator
-
-# --- Example of how to protect an API route ---
-# from .auth_client import verify_firebase_token
-
-# @bp.route('/my-protected-data')
-# @verify_firebase_token()
-# def get_protected_data():
-#     # This code will only run if the token is valid
-#     user_id = request.user['uid']
-#     return jsonify({"message": f"Hello, user {user_id}! Here is your secret data."})

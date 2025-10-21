@@ -194,14 +194,18 @@ def create_george_ai(model: str = "phi3:mini:instruct", use_cloud: bool = False)
         model_id = "gemini-1.0-pro" # Or the latest appropriate ID
         use_cloud = True
     elif model.lower() == "gemini-flash-lite":
-        model_id = "gemini-1.5-flash-latest" # Or specific version like gemini-2.0-flash-lite
+        model_id = "gemini-2.0-flash-lite" # Fast lite model for routing
+        use_cloud = True
+    elif model.lower() == "gemini-2.0-flash":
+        model_id = "gemini-2.0-flash-exp" # Gemini 2.0 Flash experimental
         use_cloud = True
     elif model.lower() == "gemini-2.5-pro":
-        model_id = "gemini-2.5-pro-latest" # Or specific version
+        model_id = "gemini-exp-1206" # Correct experimental model name
         use_cloud = True
     else: # Assume it's an Ollama model
         model_id = model
-        use_cloud = False
+        # Don't override use_cloud if explicitly set by caller
+        # use_cloud stays as passed in
         
     logger.info(f"Creating GeorgeAI instance: Model='{model_id}', Cloud={use_cloud}")
     return GeorgeAI(model=model_id, use_cloud=use_cloud)
