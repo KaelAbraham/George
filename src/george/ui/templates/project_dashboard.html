@@ -25,6 +25,8 @@
         .add-files-btn:hover:not(:disabled) { background-color: #e0a800; }
         .btn-chat { background-color: #28a745; }
         .btn-chat:hover { background-color: #1e7e34; }
+        .btn-manage-files { background-color: #6c757d; }
+        .btn-manage-files:hover { background-color: #5a6268; }
         .status-text { font-weight: bold; }
         .status-created { color: #6c757d; }
         .status-processing { color: #fd7e14; }
@@ -83,6 +85,9 @@
                             </p>
                             
                             <div class="project-actions">
+                                {# --- Manage Files Button --- #}
+                                <a href="{{ url_for('project_manager.view_project', project_id=project.id) }}" class="btn btn-manage-files">Manage Files</a>
+                                
                                 {# --- Link to Chat --- #}
                                 {% if status == 'ready' %} 
                                     <a href="{{ url_for('chat.chat_interface', project_id=project.id) }}" class="btn btn-chat">Open Project & Chat</a>
