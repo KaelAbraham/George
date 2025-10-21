@@ -61,6 +61,63 @@
                 alert('Logout failed. Please try again.');
             });
         });
+
+        // --- Handle Generate KB Button Clicks ---
+        document.querySelectorAll('.generate-kb-btn').forEach(button => {
+            button.addEventListener('click', async (event) => {
+                const projectCard = event.target.closest('.project-card');
+                const projectId = projectCard.dataset.projectId;
+                const statusSpan = projectCard.querySelector('.kb-status');
+                const clickedButton = event.target; // Reference the button itself
+
+                clickedButton.disabled = true; // Prevent multiple clicks
+                statusSpan.textContent = 'Processing...';
+                statusSpan.style.color = 'orange';
+
+                // Get the Firebase token
+                const idToken = localStorage.getItem('firebaseIdToken');
+                if (!idToken) {
+                    alert("Authentication error. Please log in again.");
+                    window.location.href = '/auth/login';
+                    return;
+                }
+
+                try {
+                    // Call the API endpoint to start processing
+                    const response = await fetch(`/api/projects/${projectId}/process`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': 'Bearer ' + idToken,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+
+                    if (response.status === 401) {
+                        alert("Authentication failed. Please log in again.");
+                        window.location.href = '/auth/login';
+                        return;
+                    }
+
+                    const data = await response.json();
+
+                    if (response.ok && data.status === 'success') {
+                        statusSpan.textContent = `Processing complete! ${data.message || ''}`;
+                        statusSpan.style.color = 'green';
+                        clickedButton.textContent = 'KB Generated (Refresh Page)';
+                    } else {
+                        statusSpan.textContent = `Error: ${data.error || 'Unknown error'}`;
+                        statusSpan.style.color = 'red';
+                        clickedButton.disabled = false; // Re-enable on error
+                    }
+
+                } catch (error) {
+                    console.error('Error triggering KB generation:', error);
+                    statusSpan.textContent = 'Network error during processing.';
+                    statusSpan.style.color = 'red';
+                    clickedButton.disabled = false; // Re-enable on error
+                }
+            });
+        });
     </script>
 
 </body>
