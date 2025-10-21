@@ -13,7 +13,7 @@ def dashboard():
         user_info = request.user # Get user info from the decorator
         return render_template('project_dashboard.html', projects=projects, user=user_info)
     except Exception as e:
-        flash(f"An error occurred: {e}", "error")
+        flash(f"An error occurred loading projects: {e}", "error")
         return render_template('project_dashboard.html', projects=[], user=request.user)
 
 @project_bp.route('/create', methods=['GET', 'POST'])

@@ -12,6 +12,12 @@
         .container { max-width: 1000px; margin: 40px auto; padding: 20px; }
         h1 { color: #333; }
         .project-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .project-meta { color: #666; font-size: 0.9em; margin: 10px 0; }
+        .status-badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 0.85em; font-weight: bold; }
+        .status-created { background: #e0e0e0; color: #555; }
+        .status-processing { background: #fff3cd; color: #856404; }
+        .status-ready { background: #d4edda; color: #155724; }
+        .status-error { background: #f8d7da; color: #721c24; }
         .new-project-btn { background: #007bff; color: white; padding: 12px 20px; text-decoration: none; border-radius: 5px; }
     </style>
 </head>
@@ -34,6 +40,17 @@
                 {% for project in projects %}
                     <div class="project-card" data-project-id="{{ project.id }}">
                         <h2>{{ project.name }}</h2>
+                        <div class="project-meta">
+                            <span class="status-badge status-{{ project.processing_status }}">
+                                {{ project.processing_status | upper }}
+                            </span>
+                            {% if project.created_at %}
+                                | Created: {{ project.created_at[:10] }}
+                            {% endif %}
+                            {% if project.author %}
+                                | Author: {{ project.author }}
+                            {% endif %}
+                        </div>
                         <p>{{ project.description or 'No description' }}</p>
                         <div>
                             <a href="/projects/{{ project.id }}">View Project</a> | 
