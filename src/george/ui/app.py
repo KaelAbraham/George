@@ -10,11 +10,13 @@ import logging
 load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent.parent.parent / '.env')
 
 # --- Import Blueprints ---
+# We are now importing the *new* blueprint files we will create
 from .blueprints.main import main_bp
 from .blueprints.auth import auth_bp
 from .blueprints.project_manager import project_bp
 from .blueprints.chat import chat_bp
 from .blueprints.upload import upload_bp
+from .blueprints.billing import billing_bp # <-- ADD THIS IMPORT
 from .api.endpoints import api_bp
 
 def create_app():
@@ -45,6 +47,7 @@ def create_app():
     app.register_blueprint(project_bp)
     app.register_blueprint(chat_bp)
     app.register_blueprint(upload_bp)
+    app.register_blueprint(billing_bp) # <-- REGISTER IT HERE
     app.register_blueprint(api_bp, url_prefix='/api')
 
     # --- Error Handlers ---
