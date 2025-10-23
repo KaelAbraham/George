@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Billing & Subscription - George AI</title>
+    <style>
+        body { font-family: sans-serif; background: #f4f4f4; margin: 0; padding: 0; }
+        .nav-bar { background: #333; color: white; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .nav-bar .user-info { font-size: 0.9em; display: flex; align-items: center; }
+        .nav-bar .logo a { color: white; text-decoration: none; font-weight: bold; font-size: 1.2em;}
+        .nav-bar a { color: #ddd; text-decoration: none; margin-left: 15px; font-size: 0.9em; }
+        #logout-btn { background: #dc3545; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; margin-left: 15px; }
+        .container { max-width: 900px; margin: 30px auto; padding: 20px; }
+        .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.08); margin-bottom: 25px; }
+        h1, h2 { color: #333; }
+        .btn { display: inline-block; background: #007bff; color: white; padding: 12px 20px; text-decoration: none; border-radius: 5px; transition: background-color 0.2s; cursor: pointer; }
+        .btn:hover { background: #0056b3; }
+        .credit-balance { font-size: 2.5em; font-weight: bold; color: #007bff; margin: 10px 0; }
+        .plan { border: 1px solid #ddd; padding: 20px; border-radius: 8px; margin-top: 15px; }
+        .plan h3 { margin-top: 0; }
+    </style>
+</head>
+<body>
+
+    <div class="nav-bar">
+        <div class="logo"><a href="{{ url_for('project_manager.dashboard') }}"><strong>George AI</strong></a></div>
+        <div class="user-info">
+            {% if customer %}
+            Logged in as: <strong>{{ customer.email }}</strong>
+            {% endif %}
+            <a href="{{ url_for('project_manager.dashboard') }}">Dashboard</a>
+            <button id="logout-btn">Logout</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h1>Account & Billing</h1>
+
+        <div class="card">
+            <h2>Current Subscription</h2>
+            <div class="plan">
+                <h3>{{ customer.subscriptionTier | title }} Plan</h3>
+                <p><strong>Status:</strong> <span style="color: green; font-weight: bold;">{{ customer.subscriptionStatus | title }}</span></p>
+                <p>
+                    {% if customer.subscriptionTier == 'Indie' %}
+                        Includes 15 credits per month (unused credits roll over).
+                        <a href="#" class="btn btn-subscribe" data-price-id="YOUR_PRO_PRICE_ID" style="background-color: #28a745; margin-top: 10px;">Upgrade to Pro</a>
+                    {% elif customer.subscriptionTier == 'Pro' %}
+                        Includes 50 credits per month.
+                    {% else %}
+                        You are on a free or custom plan.
+                    {% endif %}
+                </p>
+                <button class="btn btn-manage-subscription" style="background-color: #6c757d; margin-top: 10px;">Manage Subscription</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Pro Credits</h2>
+            <p>Credits are used for Knowledge Base Generation and Pro Reports.</p>
+            <div class="credit-balance">{{ customer.creditBalance }}</div>
+            <p>Credits remaining</p>
+            
+            {% if customer.subscriptionTier == 'Indie' %}
+            <p>{{ customer.creditsRollover or 0 }} unused credits will roll over to next month.</p>
+            {% endif %}
+            
+            <button class="btn btn-buy-credits" data-price-id="YOUR_CREDIT_PACK_PRICE_ID" style="background-color: #17a2b8;">Buy 10 Credits ($10)</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { getAuth, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getFirestore, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        // --- Firebase Config ---
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY", // Replace with your web config
+            authDomain: "your-project-id.firebaseapp.com",
+            projectId: "your-project-id",
+            // ... etc.
+        };
+        const app = firebase.initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app); // Get Firestore instance
+        // --- End Config ---
+
+
+        // --- Logout Button ---
+        const logoutBtn = document.getElementById('logout-btn');
+        if (logoutBtn) {
+            logoutBtn.addEventListener('click', () => {
+                signOut(auth).then(() => {
+                    localStorage.removeItem('firebaseIdToken');
+                    window.location.href = '/auth/login';
+                }).catch((error) => {
+                    console.error('Logout Failed:', error);
+                });
+            });
+        }
+
+        // --- Buy Credits Button Handler ---
+        const buyCreditsBtn = document.querySelector('.btn-buy-credits');
+        if (buyCreditsBtn) {
+            buyCreditsBtn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                const priceId = e.target.dataset.priceId;
+                if (!priceId || priceId.includes("YOUR_")) {
+                    alert("Credit purchase is not configured yet. Missing Price ID.");
+                    return;
+                }
+
+                const idToken = localStorage.getItem('firebaseIdToken');
+                if (!idToken) {
+                    alert("Please log in again to purchase credits.");
+                    window.location.href = '/auth/login';
+                    return;
+                }
+
+                try {
+                    // Call our backend API to create the session
+                    const response = await fetch('/api/credits/create-checkout-session', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': 'Bearer ' + idToken,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ priceId: priceId })
+                    });
+
+                    const data = await response.json();
+                    
+                    if (response.ok && data.sessionId) {
+                        // We have a session ID. Now we listen for the Stripe URL.
+                        // The Stripe Extension will update this doc.
+                        const user = auth.currentUser;
+                        const sessionRef = doc(db, "customers", user.uid, "checkout_sessions", data.sessionId);
+                        
+                        onSnapshot(sessionRef, (snap) => {
+                            const sessionData = snap.data();
+                            if (sessionData && sessionData.url) {
+                                // We have the URL! Redirect to Stripe.
+                                window.location.assign(sessionData.url);
+                            } else if (sessionData && sessionData.error) {
+                                // An error occurred
+                                alert(`Error: ${sessionData.error.message}`);
+                            }
+                        });
+                        
+                    } else {
+                        alert(`Error: ${data.error || 'Could not create checkout session.'}`);
+                    }
+                } catch (err) {
+                    console.error("Error creating checkout session:", err);
+                    alert("Error connecting to server. Please try again.");
+                }
+            });
+        }
+        
+        // TODO: Add handlers for "Upgrade to Pro" and "Manage Subscription"
+        // These will also call API endpoints that trigger the Stripe Extension
+
+    </script>
+
+</body>
+</html>
