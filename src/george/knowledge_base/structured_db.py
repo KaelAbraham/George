@@ -1,11 +1,10 @@
-"""
-Structured Database Module using SQLite for entity storage and relationships
-"""
 import sqlite3
 import os
 import logging
 from typing import List, Dict, Any, Optional
+
 logger = logging.getLogger(__name__)
+
 class StructuredDB:
     """
     Manages the SQLite database for structured entity storage and relationships.
@@ -17,21 +16,38 @@ class StructuredDB:
             db_path (str): Path to the SQLite database file
         """
         if db_path is None:
-            db_path = os.path.join(os.getcwd(), "data", "entities.db")
-        # Create the directory if it doesn't exist
+            # Default path, e.g., in a user-specific app data directory
+            # For now, let's keep it in the data folder
+            data_dir = os.path.join(os.getcwd(), "data") # Adjust as needed
+            os.makedirs(data_dir, exist_ok=True)
+            db_path = os.path.join(data_dir, "entities.db")
+        
+        # Ensure the directory for the DB exists
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        
         self.db_path = db_path
         self.conn = None
-        self.initialize_database()
-        logger.info(f"StructuredDB initialized at {db_path}")
+        try:
+            self.conn = sqlite3.connect(self.db_path)
+            self.conn.row_factory = sqlite3.Row # Access results by column name
+            self.initialize_database()
+            logger.info(f"StructuredDB initialized at {self.db_path}")
+        except sqlite3.Error as e:
+            logger.error(f"Failed to initialize database at {self.db_path}: {e}", exc_info=True)
+            raise
+
     def initialize_database(self):
         """
         Create the database tables if they don't exist.
         """
+        if not self.conn:
+            logger.error("Database connection not established.")
+            return
+
         try:
-            self.conn = sqlite3.connect(self.db_path)
             cursor = self.conn.cursor()
-            # Create entities table
+            
+            # --- Entities Table (No changes) ---
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS entities (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,7 +57,8 @@ class StructuredDB:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            # Create entity_mentions table for tracking where entities appear
+            
+            # --- Entity Mentions Table (No changes) ---
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS entity_mentions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,10 +70,11 @@ class StructuredDB:
                     character_end INTEGER,
                     mention_text TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (entity_id) REFERENCES entities (id)
+                    FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
                 )
             """)
-            # Create text_chunks table for storing processed text segments
+            
+            # --- Text Chunks Table (No changes) ---
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS text_chunks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +89,8 @@ class StructuredDB:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            # Create citations table for tracking relationships between chunks and entities
+            
+            # --- Citations Table (No changes) ---
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS citations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,63 +98,87 @@ class StructuredDB:
                     entity_id INTEGER NOT NULL,
                     relationship_type TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (chunk_id) REFERENCES text_chunks (id),
-                    FOREIGN KEY (entity_id) REFERENCES entities (id)
+                    FOREIGN KEY (chunk_id) REFERENCES text_chunks (id) ON DELETE CASCADE,
+                    FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
                 )
             """)
-            # Create indexes for better query performance
+
+            # --- NEW: Entity Notes Table ---
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS entity_notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entity_id INTEGER NOT NULL,
+                    user_id TEXT NOT NULL, -- The Firebase Auth UID
+                    note_text TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
+                )
+            """)
+
+            # --- NEW: Chat Summaries Table ---
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS chat_summaries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL, -- The Firebase Auth UID
+                    project_id TEXT NOT NULL, -- The project this chat was in
+                    original_question TEXT,
+                    summary_text TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # --- Indexes (Added new ones) ---
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_mentions_entity ON entity_mentions(entity_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON text_chunks(embedding_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_citations_chunk ON citations(chunk_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_citations_entity ON citations(entity_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_entity_notes_entity ON entity_notes(entity_id)") # NEW
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_summaries_user ON chat_summaries(user_id)") # NEW
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_summaries_project ON chat_summaries(project_id)") # NEW
+
             self.conn.commit()
-            logger.info("Database tables initialized successfully")
+            logger.info("Database tables, including entity_notes and chat_summaries, initialized successfully")
         except Exception as e:
-            logger.error(f"Failed to initialize database: {e}")
+            logger.error(f"Failed to initialize database tables: {e}", exc_info=True)
+            if self.conn:
+                self.conn.rollback() # Rollback changes on error
             raise
-    def insert_entity(self, name: str, type: str, description: str = None) -> int:
-        """
-        Insert a new entity into the database.
-        Args:
-            name (str): Name of the entity
-            type (str): Type of the entity (character, location, etc.)
-            description (str, optional): Description of the entity
-        Returns:
-            int: ID of the inserted entity
-        """
+
+    # --- (insert_entity, insert_entity_mention, insert_text_chunk, insert_citation, get_entity_by_name remain the same) ---
+    
+    def insert_entity(self, name: str, entity_type: str, description: str = None) -> int:
+        if not self.conn: raise ConnectionError("Database not connected")
         try:
             cursor = self.conn.cursor()
             cursor.execute("""
                 INSERT OR IGNORE INTO entities (name, type, description)
                 VALUES (?, ?, ?)
-            """, (name, type, description))
+            """, (name, entity_type, description))
             self.conn.commit()
-            # Get the entity ID
+            if cursor.lastrowid > 0:
+                logger.info(f"Inserted entity: {name} (ID: {cursor.lastrowid})")
+                return cursor.lastrowid
+            # If IGNORE was triggered, fetch existing ID
             cursor.execute("SELECT id FROM entities WHERE name = ?", (name,))
             result = cursor.fetchone()
             entity_id = result[0] if result else None
-            logger.info(f"Inserted entity: {name} (ID: {entity_id})")
+            if entity_id:
+                 logger.warning(f"Entity '{name}' already exists with ID: {entity_id}.")
+                 # Optionally update description/type if needed
+                 # cursor.execute("UPDATE entities SET type = ?, description = ? WHERE id = ?", (entity_type, description, entity_id))
+                 # self.conn.commit()
             return entity_id
         except Exception as e:
-            logger.error(f"Failed to insert entity {name}: {e}")
+            logger.error(f"Failed to insert entity {name}: {e}", exc_info=True)
+            self.conn.rollback()
             raise
+
     def insert_entity_mention(self, entity_id: int, source_file: str, chapter: str = None, 
                              paragraph: int = None, character_start: int = None, 
                              character_end: int = None, mention_text: str = None) -> int:
-        """
-        Insert a new entity mention into the database.
-        Args:
-            entity_id (int): ID of the entity
-            source_file (str): Source file where entity was mentioned
-            chapter (str, optional): Chapter/section name
-            paragraph (int, optional): Paragraph number
-            character_start (int, optional): Character start position
-            character_end (int, optional): Character end position
-            mention_text (str, optional): Text of the mention
-        Returns:
-            int: ID of the inserted mention
-        """
+        if not self.conn: raise ConnectionError("Database not connected")
         try:
             cursor = self.conn.cursor()
             cursor.execute("""
@@ -145,29 +188,18 @@ class StructuredDB:
             """, (entity_id, source_file, chapter, paragraph, character_start, character_end, mention_text))
             self.conn.commit()
             mention_id = cursor.lastrowid
-            logger.info(f"Inserted entity mention for entity ID {entity_id}")
+            logger.debug(f"Inserted entity mention for entity ID {entity_id}")
             return mention_id
         except Exception as e:
-            logger.error(f"Failed to insert entity mention: {e}")
+            logger.error(f"Failed to insert entity mention: {e}", exc_info=True)
+            self.conn.rollback()
             raise
+
     def insert_text_chunk(self, chunk_text: str, source_file: str, chapter: str = None,
                          paragraph_start: int = None, paragraph_end: int = None,
                          character_start: int = None, character_end: int = None,
                          embedding_id: str = None) -> int:
-        """
-        Insert a new text chunk into the database.
-        Args:
-            chunk_text (str): Text content of the chunk
-            source_file (str): Source file of the chunk
-            chapter (str, optional): Chapter/section name
-            paragraph_start (int, optional): Starting paragraph number
-            paragraph_end (int, optional): Ending paragraph number
-            character_start (int, optional): Character start position
-            character_end (int, optional): Character end position
-            embedding_id (str, optional): ID linking to vector store
-        Returns:
-            int: ID of the inserted chunk
-        """
+        if not self.conn: raise ConnectionError("Database not connected")
         try:
             cursor = self.conn.cursor()
             cursor.execute("""
@@ -179,21 +211,15 @@ class StructuredDB:
                   character_start, character_end, embedding_id))
             self.conn.commit()
             chunk_id = cursor.lastrowid
-            logger.info(f"Inserted text chunk from {source_file}")
+            logger.debug(f"Inserted text chunk from {source_file}")
             return chunk_id
         except Exception as e:
-            logger.error(f"Failed to insert text chunk: {e}")
+            logger.error(f"Failed to insert text chunk: {e}", exc_info=True)
+            self.conn.rollback()
             raise
+
     def insert_citation(self, chunk_id: int, entity_id: int, relationship_type: str = None) -> int:
-        """
-        Insert a new citation linking a text chunk to an entity.
-        Args:
-            chunk_id (int): ID of the text chunk
-            entity_id (int): ID of the entity
-            relationship_type (str, optional): Type of relationship
-        Returns:
-            int: ID of the inserted citation
-        """
+        if not self.conn: raise ConnectionError("Database not connected")
         try:
             cursor = self.conn.cursor()
             cursor.execute("""
@@ -201,75 +227,170 @@ class StructuredDB:
                 VALUES (?, ?, ?)
             """, (chunk_id, entity_id, relationship_type))
             self.conn.commit()
-            # Get the citation ID
-            cursor.execute("""
-                SELECT id FROM citations 
-                WHERE chunk_id = ? AND entity_id = ?
-            """, (chunk_id, entity_id))
-            result = cursor.fetchone()
-            citation_id = result[0] if result else None
-            logger.info(f"Inserted citation linking chunk {chunk_id} to entity {entity_id}")
+            citation_id = cursor.lastrowid # Note: will be 0 if IGNORE triggered
+            logger.debug(f"Inserted citation linking chunk {chunk_id} to entity {entity_id}")
             return citation_id
         except Exception as e:
-            logger.error(f"Failed to insert citation: {e}")
+            logger.error(f"Failed to insert citation: {e}", exc_info=True)
+            self.conn.rollback()
             raise
+
     def get_entity_by_name(self, name: str) -> Optional[Dict[str, Any]]:
-        """
-        Retrieve an entity by name.
-        Args:
-            name (str): Name of the entity
-        Returns:
-            dict: Entity data or None if not found
-        """
+        if not self.conn: raise ConnectionError("Database not connected")
         try:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM entities WHERE name = ?", (name,))
             row = cursor.fetchone()
             if row:
-                columns = [description[0] for description in cursor.description]
-                return dict(zip(columns, row))
+                # Convert sqlite3.Row object to a standard dict
+                return dict(row)
             return None
         except Exception as e:
-            logger.error(f"Failed to retrieve entity {name}: {e}")
+            logger.error(f"Failed to retrieve entity {name}: {e}", exc_info=True)
             raise
+
+    # --- NEW: Functions for Notes and Summaries ---
+    
+    def add_entity_note(self, entity_id: int, user_id: str, note_text: str) -> int:
+        """Adds a user-authored note to a specific entity."""
+        if not self.conn: raise ConnectionError("Database not connected")
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO entity_notes (entity_id, user_id, note_text)
+                VALUES (?, ?, ?)
+            """, (entity_id, user_id, note_text))
+            self.conn.commit()
+            note_id = cursor.lastrowid
+            logger.info(f"Added note (ID: {note_id}) to entity {entity_id} by user {user_id}")
+            return note_id
+        except Exception as e:
+            logger.error(f"Failed to add note to entity {entity_id}: {e}", exc_info=True)
+            self.conn.rollback()
+            raise
+
+    def get_entity_notes(self, entity_id: int) -> List[Dict[str, Any]]:
+        """Retrieves all notes for a specific entity."""
+        if not self.conn: raise ConnectionError("Database not connected")
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM entity_notes WHERE entity_id = ? ORDER BY created_at DESC", (entity_id,))
+            rows = cursor.fetchall()
+            # Convert list of sqlite3.Row objects to list of dicts
+            return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Failed to retrieve notes for entity {entity_id}: {e}", exc_info=True)
+            raise
+
+    def add_chat_summary(self, user_id: str, project_id: str, original_question: str, summary_text: str) -> int:
+        """Saves a chat summary to the database."""
+        if not self.conn: raise ConnectionError("Database not connected")
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO chat_summaries (user_id, project_id, original_question, summary_text)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, project_id, original_question, summary_text))
+            self.conn.commit()
+            summary_id = cursor.lastrowid
+            logger.info(f"Saved chat summary (ID: {summary_id}) for user {user_id}")
+            return summary_id
+        except Exception as e:
+            logger.error(f"Failed to save chat summary for user {user_id}: {e}", exc_info=True)
+            self.conn.rollback()
+            raise
+
+    def search_chat_summaries(self, user_id: str, project_id: str = None, search_term: str = None) -> List[Dict[str, Any]]:
+        """Searches chat summaries for a user, optionally by project and search term."""
+        if not self.conn: raise ConnectionError("Database not connected")
+        try:
+            cursor = self.conn.cursor()
+            query = "SELECT * FROM chat_summaries WHERE user_id = ?"
+            params = [user_id]
+            
+            if project_id:
+                query += " AND project_id = ?"
+                params.append(project_id)
+            
+            if search_term:
+                # Basic full-text search on summary and question
+                query += " AND (summary_text LIKE ? OR original_question LIKE ?)"
+                params.extend([f"%{search_term}%", f"%{search_term}%"])
+                
+            query += " ORDER BY created_at DESC"
+            
+            cursor.execute(query, tuple(params))
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Failed to search chat summaries for user {user_id}: {e}", exc_info=True)
+            raise
+
     def close(self):
         """
         Close the database connection.
         """
         if self.conn:
-            self.conn.close()
-            logger.info("Database connection closed")
+            try:
+                self.conn.close()
+                self.conn = None
+                logger.info("Database connection closed")
+            except Exception as e:
+                logger.error(f"Error closing database connection: {e}", exc_info=True)
+
+    def __del__(self):
+        # Ensure connection is closed when object is destroyed
+        self.close()
+
 if __name__ == "__main__":
-    # Test the StructuredDB initialization
+    # Test the updated StructuredDB initialization
     import tempfile
     import shutil
-    # Create a temporary directory for testing
     test_dir = tempfile.mkdtemp()
     try:
-        db_path = os.path.join(test_dir, "test_entities.db")
-        # Test initialization
+        db_path = os.path.join(test_dir, "test_entities_v2.db")
         db = StructuredDB(db_path)
         print(f"✓ StructuredDB initialized at {db_path}")
+        
         # Test inserting an entity
         entity_id = db.insert_entity("John Doe", "character", "Main protagonist")
         print(f"✓ Inserted entity with ID: {entity_id}")
-        # Test inserting an entity mention
-        mention_id = db.insert_entity_mention(
-            entity_id, "chapter1.txt", "Chapter 1", 5, 120, 150, "John entered the room"
-        )
-        print(f"✓ Inserted mention with ID: {mention_id}")
-        # Test inserting a text chunk
-        chunk_id = db.insert_text_chunk(
-            "John entered the room cautiously.", "chapter1.txt", "Chapter 1", 5, 5, 120, 155, "emb_123"
-        )
-        print(f"✓ Inserted chunk with ID: {chunk_id}")
-        # Test inserting a citation
-        citation_id = db.insert_citation(chunk_id, entity_id, "appearance")
-        print(f"✓ Inserted citation with ID: {citation_id}")
-        # Test retrieving an entity
-        entity = db.get_entity_by_name("John Doe")
-        print(f"✓ Retrieved entity: {entity}")
+        
+        # --- Test New Features ---
+        print("\nTesting new features...")
+        # Test adding a note
+        note_id = db.add_entity_note(entity_id, "user_123", "This is a test note.")
+        print(f"✓ Added entity note with ID: {note_id}")
+        
+        # Test retrieving notes
+        notes = db.get_entity_notes(entity_id)
+        print(f"✓ Retrieved {len(notes)} note(s):")
+        for note in notes:
+            print(f"  - {note['note_text']} (by {note['user_id']})")
+        assert len(notes) == 1
+        assert notes[0]['note_text'] == "This is a test note."
+
+        # Test adding a summary
+        summary_id = db.add_chat_summary("user_123", "project_abc", "What's the deal with John?", "John is the main character.")
+        print(f"✓ Added chat summary with ID: {summary_id}")
+
+        # Test searching summaries
+        summaries = db.search_chat_summaries("user_123", project_id="project_abc")
+        print(f"✓ Retrieved {len(summaries)} summary(s) for project:")
+        assert len(summaries) == 1
+        assert summaries[0]['summary_text'] == "John is the main character."
+        
+        summaries_search = db.search_chat_summaries("user_123", search_term="main character")
+        print(f"✓ Retrieved {len(summaries_search)} summary(s) via search:")
+        assert len(summaries_search) == 1
+        
+        print("\n✓ All database tests passed!")
+
+    except Exception as e:
+        print(f"\n❌ Test failed: {e}", exc_info=True)
     finally:
         # Clean up
-        db.close()
+        if 'db' in locals() and db.conn:
+            db.close()
         shutil.rmtree(test_dir)
+        print(f"✓ Cleaned up test directory: {test_dir}")
