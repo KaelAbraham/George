@@ -7,6 +7,7 @@ from firebase_admin import auth, firestore
 import firebase_admin
 from ..auth.auth_client import verify_firebase_token
 import threading  # <-- IMPORTED for background tasks
+from itertools import combinations
 from ...knowledge_extraction.query_analyzer import QueryAnalyzer
 from ...parsers.parsers import read_manuscript_file
 
@@ -30,6 +31,20 @@ except ImportError as e:
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 logger = logging.getLogger(__name__)
+
+# --- NEW: Load Foundational Consistency Prompt ---
+FOUNDATIONAL_CONSISTENCY_PROMPT = ""
+try:
+    current_dir = Path(__file__).parent.parent.parent # src/george/ui -> src/george
+    prompt_path = current_dir.parent / "prompts" / "foundational_consistency_prompt.txt"
+    with open(prompt_path, 'r', encoding='utf-8') as f:
+        FOUNDATIONAL_CONSISTENCY_PROMPT = f.read()
+    if not FOUNDATIONAL_CONSISTENCY_PROMPT:
+        raise ValueError("Foundational Consistency prompt file is empty.")
+    logger.info("Successfully loaded Foundational Consistency prompt.")
+except Exception as e:
+    logger.error(f"FATAL: Error loading Foundational Consistency prompt: {e}", exc_info=True)
+    # The route will still be created, but will fail if called
 
 # --- NEW: Load Report Prompts ---
 STANDARD_CONTINUITY_PROMPT = ""
@@ -465,6 +480,148 @@ def create_credit_checkout():
 # --- Health Check (No Changes) ---
 @api_bp.route('/health')
 def health_check():
+# --- NEW: Helper function for batch fact extraction (to avoid code duplication) ---
+def _batch_extract_facts(ai_model: GeorgeAI, chunks: list, entity_name: str) -> list:
+    """Helper to run batch fact extraction for a list of chunks."""
+    fact_timeline = []
+    # In a real implementation, we would batch chunks *together* into single API calls
+    # For MVP, we do one call per chunk (which is less efficient but simpler)
+    for chunk in chunks:
+        fact_prompt = f"From the following text, extract all factual statements, definitions, or interpretations related ONLY to the concept '{entity_name}'.\n\nText: \"{chunk['chunk_text']}\"\n\nFacts:"
+        fact_result = ai_model.chat(fact_prompt, temperature=0.0, timeout=45)
+        if fact_result['success']:
+            fact_timeline.append(f"Source: {chunk['source_file']}, Location: approx. char {chunk['character_start']}\nFacts: {fact_result['response']}\n")
+    return fact_timeline
+
+# --- NEW: Foundational Consistency Check (Pro Report) ---
+@api_bp.route('/projects/<project_id>/reports/foundational_consistency', methods=['POST'])
+@verify_firebase_token()
+def report_foundational_consistency(project_id):
+    """
+    Runs a deep consistency check on a concept by comparing
+    the WIP against the Established Lore. Costs 1 credit per concept.
+    """
+    if not db:
+        return jsonify({"error": "Database connection is not configured."}), 500
+
+    user_id = request.user_auth['uid']
+    data = request.get_json()
+    concept_name = data.get('concept_name')
+    if not concept_name:
+        return jsonify({"error": "concept_name is required."}), 400
+
+    credits_needed = 1 # This report costs 1 credit per concept
+    
+    # --- 1. Check and Deduct Credits ---
+    customer_ref = db.collection('customers').document(user_id)
+    try:
+        @firestore.transactional
+        def check_and_deduct_credits(transaction, customer_ref, amount):
+            snapshot = customer_ref.get(transaction=transaction)
+            if not snapshot.exists: raise Exception("Customer profile not found.")
+            current_balance = snapshot.get('creditBalance')
+            if current_balance is None or current_balance < amount:
+                raise ValueError(f"Insufficient credits. This report costs {amount} credit.")
+            
+            new_balance = current_balance - amount
+            transaction.update(customer_ref, {'creditBalance': new_balance})
+            return new_balance
+
+        transaction = db.transaction()
+        new_balance = check_and_deduct_credits(transaction, customer_ref, credits_needed)
+        logger.info(f"Deducted {credits_needed} credit for Foundational Consistency report. New balance: {new_balance}")
+
+    except ValueError as ve: # Insufficient credits
+        return jsonify({'status': 'error', 'error': str(ve)}), 403 # 403 Forbidden
+    except Exception as e:
+        return jsonify({"status": "error", "error": f"Credit check failed: {e}"}), 500
+
+    # --- 2. Generate Report Data (if credits successful) ---
+    try:
+        # 2a. Get project info
+        wip_project_data = pm.load_project(project_id)
+        if not wip_project_data:
+            raise Exception("WIP project not found.")
+        
+        # --- This is the key logic for a Universe-aware feature ---
+        # We need to find the "Established Lore" project(s)
+        # For now, we'll assume a simple structure where the user tells us the lore project ID
+        # TODO: This needs to be replaced with logic to find associated Lore projects in the Universe
+        lore_project_id = wip_project_data.get('associated_lore_project_id') # This field needs to be added to your project data
+        if not lore_project_id:
+             raise Exception("This project is not part of a Universe or has no Established Lore project linked.")
+        
+        # 2b. Initialize DBs for both projects
+        wip_db_path = Path(pm.get_project_path(project_id)) / "george.db"
+        lore_db_path = Path(pm.get_project_path(lore_project_id)) / "george.db"
+        
+        wip_db = StructuredDB(db_path=str(wip_db_path))
+        lore_db = StructuredDB(db_path=str(lore_db_path))
+
+        # 2c. Get Entity IDs and Chunks from both DBs
+        with wip_db:
+            wip_entity_id = wip_db.get_entity_id_by_name(concept_name)
+            wip_chunks = wip_db.get_chunks_for_entity(wip_entity_id) if wip_entity_id else []
+        
+        with lore_db:
+            lore_entity_id = lore_db.get_entity_id_by_name(concept_name)
+            lore_chunks = lore_db.get_chunks_for_entity(lore_entity_id) if lore_entity_id else []
+
+        if not lore_chunks:
+            return jsonify({
+                "status": "success",
+                "report": f"No information found for the concept '{concept_name}' in the Established Lore.",
+                "new_credit_balance": new_balance
+            })
+
+        # 2d. Initialize Pro model for analysis
+        ai_pro = create_george_ai(model="gemini-2.5-pro-latest", use_cloud=True)
+        
+        # 2e. Batch extract facts from both
+        logger.info(f"Extracting facts from {len(lore_chunks)} lore chunks...")
+        foundational_facts_list = _batch_extract_facts(ai_pro, lore_chunks, concept_name)
+        
+        logger.info(f"Extracting facts from {len(wip_chunks)} WIP chunks...")
+        wip_facts_list = _batch_extract_facts(ai_pro, wip_chunks, concept_name)
+
+        if not wip_facts_list:
+            return jsonify({
+                "status": "success",
+                "report": f"The concept '{concept_name}' was found in the Established Lore, but no mentions were found in the current Work in Progress.",
+                "new_credit_balance": new_balance
+            })
+
+        # 2f. Final Synthesis
+        logger.info("Running final synthesis...")
+        synthesis_prompt = FOUNDATIONAL_CONSISTENCY_PROMPT.format(
+            foundational_facts="\n---\n".join(foundational_facts_list),
+            wip_facts="\n---\n".join(wip_facts_list)
+        )
+        
+        synthesis_result = ai_pro.chat(synthesis_prompt, temperature=0.2)
+
+        if not synthesis_result['success']:
+            raise Exception(f"Final analysis failed: {synthesis_result['error']}")
+
+        # 3. Georgeify and return
+        ai_formatter = create_george_ai(model="gemini-flash-lite", use_cloud=True)
+        final_report = georgeify_response(
+            original_question=f"Run a foundational consistency check on '{concept_name}'",
+            raw_ai_answer=synthesis_result['response'],
+            george_formatter_ai=ai_formatter
+        )
+        return jsonify({"status": "success", "report": final_report, "new_credit_balance": new_balance})
+
+    except Exception as e:
+        logger.error(f"Failed to generate Foundational Consistency report: {e}", exc_info=True)
+        # --- ROLLBACK CREDITS on failure ---
+        try:
+            customer_ref.update({"creditBalance": firestore.Increment(credits_needed)})
+            logger.info(f"Credits refunded for user {user_id} due to report failure.")
+        except Exception as refund_e:
+            logger.critical(f"FATAL: FAILED TO REFUND 1 CREDIT for user {user_id}: {refund_e}")
+        
+        return jsonify({"status": "error", "error": f"Failed to generate report: {e}"}), 500
 # --- NEW: Standard Continuity Check (No Credit) ---
 @api_bp.route('/projects/<project_id>/reports/standard_continuity', methods=['POST'])
 @verify_firebase_token()
