@@ -1,0 +1,29 @@
+# Event Sheet: [Event Name]
+
+## 1. Core Identity & Summary
+* **Event Name:** (e.g., "The Siege of V'tar")
+* **Event Type:** (e.g., Battle, Political Summit, Disaster)
+* **Date & Duration:**
+* **Logline:** (One-sentence summary)
+
+## 2. Key Components
+* **Location(s):**
+* **Key Participants (Characters):**
+* **Key Participants (Factions):**
+* **Objective(s):** (What does each side want?)
+
+## 3. Plot Sequence (The "Blow-by-Blow")
+* **Catalyst:** (What triggers the event?)
+* **Key Actions / Turning Points:** (Chronological list of important moments)
+* **Climax:** (The single most critical moment)
+* **Resolution:** (How does it end?)
+
+## 4. Consequences & Aftermath (The "So What?")
+* **Immediate Fallout (Plot):** (The new status quo)
+* **Impact on Characters (Arc):** (How does this change them?)
+* **Long-Term Impact (World):** (How does this set up future plot points?)
+* **Thematic Significance:**
+
+## 5. Author's Meta-Notes
+* **PoV / Scene Plan:** (Who narrates this? Is it shown "on-screen"?)
+* **Foreshadowing:** (Where is this event foreshadowed?)
