@@ -223,3 +223,43 @@ class TextChunker:
                 character_end=current_chunk_end
             ))
         return chunks
+
+    def chunk_with_entity_detection(self, text: str, source_file: str, 
+                                  entities: List[Dict[str, Any]], chapter: str = None) -> List[TextChunk]:
+        """
+        Chunk text and associate entities with chunks based on text positions
+        Args:
+            text (str): Text to chunk
+            source_file (str): Source file identifier
+            entities (List[Dict]): List of entity dictionaries with position info
+            chapter (str, optional): Chapter/section name
+        Returns:
+            List[TextChunk]: List of text chunks with associated entities
+        """
+        # First create basic chunks
+        chunks = self.chunk_text(text, source_file, chapter)
+        # Associate entities with chunks based on position
+        for chunk in chunks:
+            chunk_entities = []
+            for entity in entities:
+                # Check if entity position overlaps with chunk position
+                if self._positions_overlap(
+                    chunk.character_start, chunk.character_end,
+                    entity.get('character_start'), entity.get('character_end')
+                ):
+                    chunk_entities.append(entity['name'])
+            chunk.entities = chunk_entities
+        return chunks
+
+    def _positions_overlap(self, start1: int, end1: int, start2: int, end2: int) -> bool:
+        """
+        Check if two character position ranges overlap
+        Args:
+            start1 (int): Start of first range
+            end1 (int): End of first range
+            start2 (int): Start of second range
+            end2 (int): End of second range
+        Returns:
+            bool: True if ranges overlap
+        """
+        return max(start1, start2) <= min(end1, end2)
