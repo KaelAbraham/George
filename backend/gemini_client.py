@@ -11,6 +11,14 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+# Optional local LLM (Ollama) support
+try:
+    import ollama  # type: ignore
+    OLLAMA_AVAILABLE = True
+except Exception:
+    ollama = None
+    OLLAMA_AVAILABLE = False
+
 @dataclass
 class ChatMessage:
     """Represents a chat message."""
@@ -63,6 +71,36 @@ class CloudAPIClient:
         except (KeyError, IndexError) as e:
             logger.error(f"Unexpected API response structure for model {self.model}")
             raise Exception(f"Invalid response from {self.model}: {e}")
+
+
+class OllamaClient:
+    """Minimal Ollama client with a compatible interface to CloudAPIClient."""
+    def __init__(self, model: str = "phi3:mini:instruct"):
+        self.model = model
+
+    def is_available(self) -> bool:
+        if not OLLAMA_AVAILABLE:
+            return False
+        try:
+            ollama.list()
+            return True
+        except Exception:
+            return False
+
+    def generate_response(self, prompt: str, system_prompt: str = None, temperature: float = 0.7) -> str:
+        if not OLLAMA_AVAILABLE:
+            raise Exception("Ollama is not installed/available")
+        full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+        try:
+            response = ollama.chat(
+                model=self.model,
+                messages=[{"role": "user", "content": full_prompt}],
+                options={"temperature": temperature},
+            )
+            return response["message"]["content"].strip()
+        except Exception as e:
+            logger.error(f"Ollama chat failed: {e}")
+            raise
 
 
 class AIRouter:
@@ -192,6 +230,50 @@ class GeminiClient:
         except Exception as e:
             logger.error(f"Error in chat processing: {e}")
             return {"response": f"Sorry, I encountered an error: {e}", "success": False}
+
+
+# --- Compatibility layer (migrated from src/george/llm_integration.py) ---
+class GeorgeAICompat:
+    """Compatibility wrapper that mimics llm_integration.GeorgeAI.chat()."""
+    def __init__(self, model: str = "phi3:mini:instruct", use_cloud: bool = False, api_key: Optional[str] = None):
+        self.model = model
+        self.use_cloud = use_cloud
+        if use_cloud:
+            resolved_key = api_key or os.getenv("GEMINI_API_KEY")
+            if not resolved_key:
+                raise ValueError("GEMINI_API_KEY not set for cloud mode")
+            # Map friendly names to actual Gemini models
+            model_map = {
+                "gemini-pro": "gemini-1.0-pro",
+                "gemini-flash-lite": "gemini-2.0-flash-lite",
+                "gemini-2.0-flash": "gemini-2.0-flash",
+                "gemini-2.5-pro": "gemini-2.5-pro",
+            }
+            model_id = model_map.get(model.lower(), model)
+            self.client = CloudAPIClient(api_key=resolved_key, model=model_id)
+        else:
+            self.client = OllamaClient(model=model)
+
+    def is_available(self) -> bool:
+        try:
+            return self.client.is_available()
+        except Exception:
+            return False
+
+    def chat(self, prompt: str, project_context: str = "", temperature: float = 0.7, timeout: int = 30) -> Dict[str, Any]:
+        full_prompt = prompt
+        if project_context:
+            full_prompt = f"{prompt}\n\n--- Start Context ---\n{project_context}\n--- End Context ---"
+        try:
+            text = self.client.generate_response(full_prompt, temperature=temperature)
+            return {"success": True, "response": text, "model": getattr(self.client, "model", "unknown")}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+
+def create_george_ai(model: str = "phi3:mini:instruct", use_cloud: bool = False, api_key: Optional[str] = None) -> GeorgeAICompat:
+    """Factory to maintain backwards compatibility with llm_integration.create_george_ai."""
+    return GeorgeAICompat(model=model, use_cloud=use_cloud, api_key=api_key)
     
     def get_knowledge_client(self) -> CloudAPIClient:
         """Provides direct access to the powerful Pro client for high-value tasks."""
