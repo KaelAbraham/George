@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.george.llm_integration import create_george_ai
-from src.george.knowledge_extraction import KnowledgeExtractor
+from backend.knowledge_extraction import KnowledgeExtractor
 
 def test_knowledge_extraction():
     """Test knowledge extraction on a sample file."""

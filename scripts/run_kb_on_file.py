@@ -1,7 +1,14 @@
 import os
+import sys
 from pathlib import Path
+
+# Add paths for imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root / 'src' / 'george'))
+sys.path.insert(0, str(project_root / 'backend'))
+
 from george.parsers.parsers import read_manuscript_file
-from george.knowledge_extraction.orchestrator import KnowledgeExtractor
+from knowledge_extraction.orchestrator import KnowledgeExtractor
 from george.llm_integration import create_george_ai
 
 def run_kb_generator_on_file(file_path):

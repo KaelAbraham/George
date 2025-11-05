@@ -11,12 +11,18 @@ import threading
 
 # --- Import backend modules ---
 try:
-    from ...knowledge_extraction.orchestrator import KnowledgeExtractor
     from ...llm_integration import create_george_ai, GeorgeAI
     from ...project_manager import ProjectManager
     from ...parsers.parsers import read_manuscript_file
     # --- IMPORT THE NEW STRUCTURED DB CLASS ---
-    from ...knowledge_base.structured_db import StructuredDB 
+    from ...knowledge_base.structured_db import StructuredDB
+    # Import KnowledgeExtractor from backend (moved from src/george/knowledge_extraction)
+    import sys
+    from pathlib import Path
+    backend_path = Path(__file__).resolve().parent.parent.parent.parent / 'backend'
+    if str(backend_path) not in sys.path:
+        sys.path.insert(0, str(backend_path))
+    from knowledge_extraction.orchestrator import KnowledgeExtractor
 except ImportError as e:
     logging.critical(f"FATAL: Could not import core backend modules in endpoints.py: {e}")
     # Define dummy classes
@@ -190,7 +196,12 @@ def project_chat(project_id):
         if not project_root_path_str: # Check for None or empty
             return jsonify({"error": f"Project '{project_id}' not found."}), 404
         
-        from ...knowledge_extraction.query_analyzer import QueryAnalyzer
+        # Import QueryAnalyzer from backend (moved from src/george/knowledge_extraction)
+        import sys
+        backend_path = Path(__file__).resolve().parent.parent.parent.parent / 'backend'
+        if str(backend_path) not in sys.path:
+            sys.path.insert(0, str(backend_path))
+        from knowledge_extraction.query_analyzer import QueryAnalyzer
         analyzer = QueryAnalyzer(ai_router, project_path=project_root_path_str)
 
         analysis_result, context_str = analyzer.build_context_for_query(question)

@@ -4,7 +4,11 @@ Test knowledge extraction system directly
 import sys
 from pathlib import Path
 
-# Add src/george to path
+# Add backend to path for knowledge_extraction
+backend_path = Path(__file__).parent / 'backend'
+sys.path.insert(0, str(backend_path))
+
+# Add src/george to path for llm_integration
 sys.path.insert(0, str(Path(__file__).parent / 'src' / 'george'))
 
 print("🔍 Testing Knowledge Extraction System...")

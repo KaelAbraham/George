@@ -15,11 +15,14 @@ import sys
 # Add the 'src' directory to the Python path
 project_root = Path(__file__).parent.parent
 src_path = project_root / 'src'
+backend_path = project_root / 'backend'
 sys.path.insert(0, str(src_path))
+sys.path.insert(0, str(backend_path))
 
-# Now we can import directly from the 'george' package
+# Now we can import from the 'george' package and local 'knowledge_extraction'
 from george.llm_integration import GeorgeAI
-from george.knowledge_extraction.orchestrator import KnowledgeExtractor
+# Import from local knowledge_extraction (now in backend/)
+from knowledge_extraction.orchestrator import KnowledgeExtractor
 
 # Load environment variables from project root
 load_dotenv(dotenv_path=project_root / '.env')
