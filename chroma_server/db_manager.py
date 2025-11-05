@@ -76,3 +76,206 @@ class ChromaManager:
         except Exception as e:
             logger.error(f"Failed to query collection {collection_name}: {e}", exc_info=True)
             raise
+
+# ===== Consolidated Knowledge Base Logic (moved from src/george/knowledge_base) =====
+# VectorStore, StructuredDB, HybridSearchEngine, KnowledgeBaseBuilder
+
+import sqlite3
+
+
+class StructuredDB:
+    """SQLite-backed structured store for entities, mentions, chunks, citations, and notes."""
+    def __init__(self, db_path: Union[str, Path] = None):
+        if db_path is None:
+            db_path = Path.cwd() / "data" / "entities.db"
+        else:
+            db_path = Path(db_path)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.db_path = db_path
+        self.conn = sqlite3.connect(str(db_path), isolation_level=None)
+        self.conn.row_factory = sqlite3.Row
+        self.initialize_database()
+
+    def initialize_database(self) -> None:
+        c = self.conn.cursor()
+        c.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS entities (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT UNIQUE NOT NULL,
+              type TEXT NOT NULL,
+              description TEXT,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS entity_mentions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              entity_id INTEGER NOT NULL,
+              source_file TEXT NOT NULL,
+              chapter TEXT,
+              paragraph INTEGER,
+              character_start INTEGER,
+              character_end INTEGER,
+              mention_text TEXT,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS text_chunks (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              chunk_text TEXT NOT NULL,
+              source_file TEXT NOT NULL,
+              chapter TEXT,
+              paragraph_start INTEGER,
+              paragraph_end INTEGER,
+              character_start INTEGER,
+              character_end INTEGER,
+              embedding_id TEXT UNIQUE,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS citations (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              chunk_id INTEGER NOT NULL,
+              entity_id INTEGER NOT NULL,
+              relationship_type TEXT,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY (chunk_id) REFERENCES text_chunks (id) ON DELETE CASCADE,
+              FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE,
+              UNIQUE(chunk_id, entity_id)
+            );
+            CREATE TABLE IF NOT EXISTS entity_notes (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              entity_id INTEGER NOT NULL,
+              user_id TEXT NOT NULL,
+              note_text TEXT NOT NULL,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY (entity_id) REFERENCES entities (id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS chat_summaries (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id TEXT NOT NULL,
+              project_id TEXT NOT NULL,
+              original_question TEXT,
+              summary_text TEXT NOT NULL,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
+            CREATE INDEX IF NOT EXISTS idx_mentions_entity ON entity_mentions(entity_id);
+            CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON text_chunks(embedding_id);
+            CREATE INDEX IF NOT EXISTS idx_citations_chunk ON citations(chunk_id);
+            CREATE INDEX IF NOT EXISTS idx_citations_entity ON citations(entity_id);
+            CREATE INDEX IF NOT EXISTS idx_entity_notes_entity ON entity_notes(entity_id);
+            CREATE INDEX IF NOT EXISTS idx_chat_summaries_user ON chat_summaries(user_id);
+            CREATE INDEX IF NOT EXISTS idx_chat_summaries_project ON chat_summaries(project_id);
+            """
+        )
+
+    def transaction(self):
+        class _Tx:
+            def __init__(self, conn):
+                self.conn = conn
+                self._nested = False
+            def __enter__(self):
+                if self.conn.in_transaction:
+                    self._nested = True
+                    return self
+                self.conn.execute("BEGIN")
+                return self
+            def __exit__(self, exc_type, *_):
+                if self._nested:
+                    return
+                if exc_type is None:
+                    self.conn.commit()
+                else:
+                    self.conn.rollback()
+        return _Tx(self.conn)
+
+    def insert_entity(self, name: str, entity_type: str, description: Optional[str] = None) -> int:
+        c = self.conn.cursor()
+        c.execute("INSERT OR IGNORE INTO entities (name, type, description) VALUES (?, ?, ?)", (name, entity_type, description))
+        if c.rowcount > 0:
+            return c.lastrowid
+        c.execute("SELECT id FROM entities WHERE name = ?", (name,))
+        row = c.fetchone()
+        return row[0] if row else 0
+
+    def insert_entity_mention(self, entity_id: int, source_file: str, chapter: Optional[str] = None,
+                               paragraph: Optional[int] = None, character_start: Optional[int] = None,
+                               character_end: Optional[int] = None, mention_text: Optional[str] = None) -> int:
+        c = self.conn.cursor()
+        c.execute(
+            """
+            INSERT INTO entity_mentions (entity_id, source_file, chapter, paragraph, character_start, character_end, mention_text)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (entity_id, source_file, chapter, paragraph, character_start, character_end, mention_text),
+        )
+        return c.lastrowid
+
+    def insert_text_chunk(self, chunk_text: str, source_file: str, chapter: Optional[str] = None,
+                           paragraph_start: Optional[int] = None, paragraph_end: Optional[int] = None,
+                           character_start: Optional[int] = None, character_end: Optional[int] = None,
+                           embedding_id: Optional[str] = None) -> int:
+        c = self.conn.cursor()
+        c.execute(
+            """
+            INSERT INTO text_chunks (chunk_text, source_file, chapter, paragraph_start, paragraph_end, character_start, character_end, embedding_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (chunk_text, source_file, chapter, paragraph_start, paragraph_end, character_start, character_end, embedding_id),
+        )
+        return c.lastrowid
+
+    def insert_citation(self, chunk_id: int, entity_id: int, relationship_type: Optional[str] = None) -> int:
+        c = self.conn.cursor()
+        c.execute(
+            "INSERT OR IGNORE INTO citations (chunk_id, entity_id, relationship_type) VALUES (?, ?, ?)",
+            (chunk_id, entity_id, relationship_type),
+        )
+        return c.lastrowid
+
+    def get_entity_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        c = self.conn.cursor()
+        c.execute("SELECT * FROM entities WHERE name = ?", (name,))
+        row = c.fetchone()
+        return dict(row) if row else None
+
+
+class VectorStore:
+    """Light wrapper mapping to Chroma via ChromaManager for compatibility."""
+    def __init__(self, manager: ChromaManager, default_collection: str = "knowledge_base"):
+        self.manager = manager
+        self.default_collection = default_collection
+
+    def create_collection(self, name: str) -> bool:
+        coll = self.manager.get_or_create_collection(name)
+        return coll is not None
+
+    def drop_collection(self, name: str) -> None:
+        if not self.manager.client:
+            return
+        if any(c.name == name for c in self.manager.client.list_collections()):
+            self.manager.client.delete_collection(name=name)
+
+    def add_texts(self, texts: List[str], metadatas: Optional[List[Dict[str, Any]]] = None, ids: Optional[List[str]] = None, collection: Optional[str] = None) -> None:
+        collection_name = collection or self.default_collection
+        self.manager.add_texts(collection_name, texts, metadatas, ids)
+
+    def search(self, query: str, n_results: int = 5, collection: Optional[str] = None, where: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        collection_name = collection or self.default_collection
+        return self.manager.query(collection_name, [query], n_results, where)
+
+
+class HybridSearchEngine:
+    def __init__(self, vector_store: VectorStore, structured_db: StructuredDB):
+        self.vector_store = vector_store
+        self.structured_db = structured_db
+
+    def entity_search(self, entity_name: str) -> Optional[Dict[str, Any]]:
+        return self.structured_db.get_entity_by_name(entity_name)
+
+    def semantic_search(self, query: str, n_results: int = 5, collection: Optional[str] = None) -> Dict[str, Any]:
+        return self.vector_store.search(query, n_results, collection)
+
+    def hybrid_search(self, query: str, n_results: int = 5, collection: Optional[str] = None) -> Dict[str, Any]:
+        sem = self.semantic_search(query, n_results, collection)
+        return {"semantic_results": sem, "entity_results": []}
