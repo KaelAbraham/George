@@ -1,11 +1,12 @@
 """Main application file for the ChromaDB server."""
 from flask import Flask, request, jsonify
-from db_manager import ChromaManager
+from db_manager import ChromaManager, GraphManager
 
 app = Flask(__name__)
 
-# Initialize ChromaDB manager
+# Initialize ChromaDB manager and Graph manager
 db_manager = ChromaManager()
+graph_manager = GraphManager()
 
 @app.route('/create_collection', methods=['POST'])
 def create_collection():
@@ -52,6 +53,73 @@ def query():
     try:
         results = db_manager.query(collection_name, query_texts, n_results, where)
         return jsonify(results), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ===== Graph Endpoints =====
+
+@app.route('/graph/<project_id>/node', methods=['POST'])
+def add_node(project_id):
+    """Add a node to the knowledge graph for a project."""
+    data = request.get_json()
+    node_id = data.get('node_id')
+    node_type = data.get('type', 'unknown')
+    
+    if not node_id:
+        return jsonify({'error': 'node_id is required'}), 400
+    
+    try:
+        # Extract attributes (everything except node_id and type)
+        attrs = {k: v for k, v in data.items() if k not in ['node_id', 'type']}
+        attrs['type'] = node_type
+        
+        graph_manager.add_node(project_id, node_id, **attrs)
+        graph_manager.save_graph(project_id)
+        
+        return jsonify({'message': f"Node '{node_id}' added to graph for project '{project_id}'"}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/graph/<project_id>/edge', methods=['POST'])
+def add_edge(project_id):
+    """Add an edge (relationship) to the knowledge graph for a project."""
+    data = request.get_json()
+    node_from = data.get('node_from')
+    node_to = data.get('node_to')
+    label = data.get('label', 'related_to')
+    
+    if not node_from or not node_to:
+        return jsonify({'error': 'node_from and node_to are required'}), 400
+    
+    try:
+        # Extract attributes (everything except node_from, node_to, label)
+        attrs = {k: v for k, v in data.items() if k not in ['node_from', 'node_to', 'label']}
+        attrs['label'] = label
+        
+        graph_manager.add_edge(project_id, node_from, node_to, **attrs)
+        graph_manager.save_graph(project_id)
+        
+        return jsonify({'message': f"Edge from '{node_from}' to '{node_to}' added to graph"}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/graph/<project_id>', methods=['GET'])
+def get_graph(project_id):
+    """Get the knowledge graph for a project."""
+    try:
+        g = graph_manager.get_or_create_graph(project_id)
+        
+        # Convert graph to JSON-serializable format
+        nodes = [{'id': node, **g.nodes[node]} for node in g.nodes()]
+        edges = [{'source': u, 'target': v, **g.edges[u, v]} for u, v in g.edges()]
+        
+        return jsonify({
+            'project_id': project_id,
+            'nodes': nodes,
+            'edges': edges,
+            'num_nodes': len(nodes),
+            'num_edges': len(edges)
+        }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

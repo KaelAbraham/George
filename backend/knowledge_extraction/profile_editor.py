@@ -7,8 +7,12 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import re
 import logging
+import requests
 
 logger = logging.getLogger(__name__)
+
+# Define the URL for the chroma_server
+CHROMA_SERVER_URL = "http://localhost:5002"
 
 # Add backend to path if needed
 current_dir = Path(__file__).parent.parent
@@ -365,6 +369,124 @@ Return the COMPLETE merged profile."""
             entities.append(name.replace('_', ' '))
         
         return ', '.join(sorted(entities)[:10]) + ('...' if len(entities) > 10 else '')
+    
+    def _save_profile_as_md(self, profile_data: Dict, project_id: str, entity_name: str, entity_type: str) -> Optional[str]:
+        """
+        Saves a profile as a markdown file AND updates the knowledge graph via the graph server.
+        
+        Args:
+            profile_data: Dictionary containing entity information
+            project_id: Project identifier
+            entity_name: Name of the entity
+            entity_type: Type of entity (character, location, term)
+        
+        Returns:
+            Path to saved file, or None if failed
+        """
+        # Create markdown content from profile_data
+        md_content = f"# {entity_name}\n\n"
+        md_content += f"**Type:** {entity_type}\n\n"
+        
+        if 'Summary' in profile_data:
+            md_content += f"## Summary\n\n{profile_data['Summary']}\n\n"
+        
+        if 'Description' in profile_data:
+            md_content += f"## Description\n\n{profile_data['Description']}\n\n"
+        
+        if 'Relationships' in profile_data:
+            md_content += "## Relationships\n\n"
+            relationships = profile_data['Relationships']
+            if isinstance(relationships, dict):
+                for rel_type, rel_entities in relationships.items():
+                    if isinstance(rel_entities, list):
+                        for rel_entity in rel_entities:
+                            if rel_entity and rel_entity != "N/A":
+                                md_content += f"- **{rel_type}:** {rel_entity}\n"
+                    elif rel_entities and rel_entities != "N/A":
+                        md_content += f"- **{rel_type}:** {rel_entities}\n"
+            md_content += "\n"
+        
+        # Create file path
+        prefix_map = {'character': 'character_', 'location': 'location_', 'term': 'term_'}
+        prefix = prefix_map.get(entity_type.lower(), 'term_')
+        file_path = self.kb_path / f"{prefix}{entity_name.replace(' ', '_')}.md"
+        
+        try:
+            # Ensure directory exists
+            self.kb_path.mkdir(parents=True, exist_ok=True)
+            
+            # Save markdown file
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(md_content)
+            logger.info(f"Successfully saved MD file to {file_path}")
+            
+            # Update knowledge graph via graph server
+            self._update_knowledge_graph(project_id, entity_name, entity_type, profile_data)
+            
+            return str(file_path)
+        
+        except Exception as e:
+            logger.error(f"Error saving profile for {entity_name}: {e}")
+            return None
+    
+    def _update_knowledge_graph(self, project_id: str, entity_name: str, entity_type: str, profile_data: Dict):
+        """
+        Posts the extracted entity and its relationships to the chroma_server's graph endpoints.
+        
+        Args:
+            project_id: Project identifier
+            entity_name: Name of the entity
+            entity_type: Type of entity
+            profile_data: Dictionary containing entity information including relationships
+        """
+        try:
+            # 1. Add the main entity as a node
+            node_data = {
+                "node_id": entity_name,
+                "type": entity_type,
+                "summary": profile_data.get('Summary', 'N/A')
+            }
+            response = requests.post(
+                f"{CHROMA_SERVER_URL}/graph/{project_id}/node",
+                json=node_data,
+                timeout=5
+            )
+            response.raise_for_status()
+            logger.info(f"Successfully added node {entity_name} to graph.")
+            
+            # 2. Add all relationships as edges
+            relationships = profile_data.get('Relationships', {})
+            if isinstance(relationships, dict):
+                for rel_type, rel_entities in relationships.items():
+                    if not isinstance(rel_entities, list):
+                        rel_entities = [rel_entities]  # Ensure it's a list
+                    
+                    for entity_name_to in rel_entities:
+                        if not entity_name_to or entity_name_to == "N/A":
+                            continue
+                        
+                        edge_data = {
+                            "node_from": entity_name,
+                            "node_to": entity_name_to,
+                            "label": rel_type.upper()  # e.g., "SPOUSE_OF", "VISITED"
+                        }
+                        response = requests.post(
+                            f"{CHROMA_SERVER_URL}/graph/{project_id}/edge",
+                            json=edge_data,
+                            timeout=5
+                        )
+                        response.raise_for_status()
+            
+            logger.info(f"Successfully updated knowledge graph for node {entity_name}.")
+        
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to update knowledge graph for {entity_name}: {e}")
+            # Don't block the whole process if this fails
+            pass
+        except Exception as e:
+            logger.error(f"Unexpected error updating knowledge graph: {e}")
+            # Don't block the whole process if this fails
+            pass
     
     def execute_edit(self, command_dict: Dict) -> Dict:
         """

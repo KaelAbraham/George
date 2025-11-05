@@ -4,6 +4,10 @@ import uuid
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
+import json
+
+import networkx as nx
+from networkx.readwrite import json_graph
 
 try:
     import chromadb
@@ -379,3 +383,69 @@ class HybridSearchEngine:
     def hybrid_search(self, query: str, n_results: int = 5, collection: Optional[str] = None) -> Dict[str, Any]:
         sem = self.semantic_search(query, n_results, collection)
         return {"semantic_results": sem, "entity_results": []}
+
+
+class GraphManager:
+    """Manages NetworkX graphs for each project."""
+    def __init__(self, persist_directory: Union[str, Path] = None):
+        if persist_directory is None:
+            persist_directory = Path.cwd() / "data" / "graph_db"
+        else:
+            persist_directory = Path(persist_directory)
+
+        persist_directory.mkdir(parents=True, exist_ok=True)
+        self.persist_directory = persist_directory
+        self.graphs = {}  # In-memory cache
+        logger.info(f"GraphManager initialized at {self.persist_directory}")
+
+    def _get_graph_path(self, project_id: str) -> Path:
+        """Gets the file path for a project's graph."""
+        return self.persist_directory / f"{project_id}_graph.json"
+
+    def get_or_create_graph(self, project_id: str) -> nx.Graph:
+        """Loads a graph from disk or creates a new one."""
+        if project_id in self.graphs:
+            return self.graphs[project_id]
+
+        graph_path = self._get_graph_path(project_id)
+        if graph_path.exists():
+            try:
+                with open(graph_path, 'r') as f:
+                    data = json.load(f)
+                    g = json_graph.node_link_graph(data)
+                self.graphs[project_id] = g
+                logger.info(f"Loaded graph for {project_id} from disk.")
+                return g
+            except Exception as e:
+                logger.error(f"Failed to load graph {project_id}: {e}. Creating new one.")
+
+        g = nx.Graph()
+        self.graphs[project_id] = g
+        logger.info(f"Created new in-memory graph for {project_id}.")
+        return g
+
+    def save_graph(self, project_id: str):
+        """Saves a graph from memory to a JSON file on disk."""
+        if project_id not in self.graphs:
+            logger.warning(f"No graph in memory for {project_id} to save.")
+            return
+
+        g = self.graphs[project_id]
+        graph_path = self._get_graph_path(project_id)
+        try:
+            data = json_graph.node_link_data(g)
+            with open(graph_path, 'w') as f:
+                json.dump(data, f)
+            logger.info(f"Successfully saved graph for {project_id} to disk.")
+        except Exception as e:
+            logger.error(f"Failed to save graph {project_id}: {e}")
+
+    def add_node(self, project_id: str, node_id: str, **attrs):
+        """Adds a node with attributes to the project graph."""
+        g = self.get_or_create_graph(project_id)
+        g.add_node(node_id, **attrs)
+
+    def add_edge(self, project_id: str, node_from: str, node_to: str, **attrs):
+        """Adds an edge with attributes between two nodes."""
+        g = self.get_or_create_graph(project_id)
+        g.add_edge(node_from, node_to, **attrs)
