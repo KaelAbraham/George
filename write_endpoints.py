@@ -1,4 +1,7 @@
+#!/usr/bin/env python3
 import os
+
+endpoints_code = """import os
 import logging
 from flask import Blueprint, jsonify, request
 from ..auth.auth_client import verify_firebase_token
@@ -12,7 +15,7 @@ logger = logging.getLogger(__name__)
 @api_bp.route('/projects/<project_id>/chat', methods=['POST'])
 @verify_firebase_token()
 def project_chat(project_id):
-    """Handles a chat message for a specific project."""
+    \"\"\"Handles a chat message for a specific project.\"\"\"
     try:
         data = request.get_json()
         question = data.get('question')
@@ -45,7 +48,7 @@ def project_chat(project_id):
 @api_bp.route('/projects/<project_id>/process', methods=['POST'])
 @verify_firebase_token()
 def process_manuscript(project_id):
-    """Triggers knowledge base generation for a project."""
+    \"\"\"Triggers knowledge base generation for a project.\"\"\"
     try:
         user_id = request.user.get('uid') if hasattr(request, 'user') else None
         
@@ -72,7 +75,7 @@ def process_manuscript(project_id):
 # --- Health Check Endpoint ---
 @api_bp.route('/health', methods=['GET'])
 def health_check():
-    """Check if backend services are healthy."""
+    \"\"\"Check if backend services are healthy.\"\"\"
     try:
         response = backend_client.check_health()
         
@@ -99,7 +102,7 @@ def health_check():
 @api_bp.route('/projects/<project_id>/status', methods=['GET'])
 @verify_firebase_token()
 def project_status(project_id):
-    """Get the current status of a project."""
+    \"\"\"Get the current status of a project.\"\"\"
     try:
         user_id = request.user.get('uid') if hasattr(request, 'user') else None
         
@@ -126,7 +129,7 @@ def project_status(project_id):
 @api_bp.route('/projects/<project_id>/entities', methods=['GET'])
 @verify_firebase_token()
 def project_entities(project_id):
-    """Get entities from a project."""
+    \"\"\"Get entities from a project.\"\"\"
     try:
         user_id = request.user.get('uid') if hasattr(request, 'user') else None
         
@@ -147,3 +150,10 @@ def project_entities(project_id):
     except Exception as e:
         logger.error(f'Error getting project entities: {e}', exc_info=True)
         return jsonify({'error': str(e)}), 500
+"""
+
+target_path = r'c:\Users\kael_\George\src\george\ui\api\endpoints.py'
+with open(target_path, 'w', encoding='utf-8') as f:
+    f.write(endpoints_code)
+
+print(f"✓ Successfully wrote {target_path}")

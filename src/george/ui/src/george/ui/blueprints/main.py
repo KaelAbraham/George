@@ -1,19 +1,19 @@
-"""Main UI routes for George application - DEPRECATED."""
+"""Main UI routes for George application - REFACTORED for HTTP Backend"""
 from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app
 from werkzeug.utils import secure_filename
 import os
 import sys
 from pathlib import Path
 
-# NOTE: This blueprint is part of the deprecated monolithic UI.
-# The new modular architecture uses backend/app.py instead.
+# NOTE: This blueprint now uses HTTP calls to the backend instead of direct imports
+# All backend operations are accessed via the backend_client module
 
 main_bp = Blueprint('main', __name__)
 
 @main_bp.route('/')
 def index():
-    """Home page - deprecated."""
-    return render_template('deprecation_notice.html')
+    """Home page."""
+    return render_template('index.html')
             return redirect(request.url)
         
         file = request.files['manuscript']

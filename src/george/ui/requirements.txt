@@ -9,6 +9,7 @@ itsdangerous>=2.2.0
 werkzeug>=3.1.3
 jinja2>=3.1.6
 click>=8.2.1
+requests>=2.31.0
 # NLP and Entity Recognition
 spacy>=3.7.0
 spacy-transformers>=1.3.0
