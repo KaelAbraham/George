@@ -1,34 +1,19 @@
-"""Main UI routes for George application."""
+"""Main UI routes for George application - DEPRECATED."""
 from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app
 from werkzeug.utils import secure_filename
 import os
 import sys
 from pathlib import Path
 
-# Add the src directory to the path so we can import from george
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
-
-try:
-    from george.core import GeorgeProcessor
-    from george.knowledge_base.builder import KnowledgeBaseBuilder
-    george_available = True
-except ImportError as e:
-    print(f"Warning: George modules not available: {e}")
-    george_available = False
+# NOTE: This blueprint is part of the deprecated monolithic UI.
+# The new modular architecture uses backend/app.py instead.
 
 main_bp = Blueprint('main', __name__)
 
 @main_bp.route('/')
 def index():
-    """Home page with project overview."""
-    return render_template('index.html')
-
-@main_bp.route('/upload', methods=['GET', 'POST'])
-def upload():
-    """Upload and process manuscript."""
-    if request.method == 'POST':
-        if 'manuscript' not in request.files:
-            flash('No file selected', 'error')
+    """Home page - deprecated."""
+    return render_template('deprecation_notice.html')
             return redirect(request.url)
         
         file = request.files['manuscript']
