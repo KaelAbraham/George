@@ -5,9 +5,13 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
 
-import chromadb
-from chromadb.config import Settings
-CHROMA_AVAILABLE = True
+try:
+    import chromadb
+    from chromadb.config import Settings
+    CHROMA_AVAILABLE = True
+except (ImportError, Exception) as e:
+    CHROMA_AVAILABLE = False
+    logging.warning(f"ChromaDB import failed: {e}. Vector storage will be disabled.")
 
 logger = logging.getLogger(__name__)
 
