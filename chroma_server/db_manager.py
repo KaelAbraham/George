@@ -241,28 +241,124 @@ class StructuredDB:
 
 
 class VectorStore:
-    """Light wrapper mapping to Chroma via ChromaManager for compatibility."""
-    def __init__(self, manager: ChromaManager, default_collection: str = "knowledge_base"):
-        self.manager = manager
-        self.default_collection = default_collection
-
-    def create_collection(self, name: str) -> bool:
-        coll = self.manager.get_or_create_collection(name)
-        return coll is not None
-
-    def drop_collection(self, name: str) -> None:
-        if not self.manager.client:
+    """
+    Manages the Chroma vector database for semantic text storage and retrieval.
+    Enhanced version with full functionality.
+    """
+    def __init__(self, persist_directory: str = None):
+        """
+        Initialize the vector store with Chroma client.
+        Args:
+            persist_directory (str): Path to persist the vector database
+        """
+        if not CHROMA_AVAILABLE:
+            logger.warning("ChromaDB is not available. Vector storage disabled.")
+            self.client = None
+            self.collection = None
             return
-        if any(c.name == name for c in self.manager.client.list_collections()):
-            self.manager.client.delete_collection(name=name)
-
-    def add_texts(self, texts: List[str], metadatas: Optional[List[Dict[str, Any]]] = None, ids: Optional[List[str]] = None, collection: Optional[str] = None) -> None:
-        collection_name = collection or self.default_collection
-        self.manager.add_texts(collection_name, texts, metadatas, ids)
-
-    def search(self, query: str, n_results: int = 5, collection: Optional[str] = None, where: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        collection_name = collection or self.default_collection
-        return self.manager.query(collection_name, [query], n_results, where)
+            
+        if persist_directory is None:
+            persist_directory = os.path.join(os.getcwd(), "data", "vector_db")
+        
+        # Create the directory if it doesn't exist
+        os.makedirs(persist_directory, exist_ok=True)
+        
+        try:
+            # Initialize Chroma client with persistence
+            self.client = chromadb.PersistentClient(
+                path=persist_directory,
+                settings=Settings(
+                    anonymized_telemetry=False
+                )
+            )
+            self.collection = None
+            logger.info(f"Vector store initialized with directory: {persist_directory}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize ChromaDB: {e}. Vector storage disabled.")
+            self.client = None
+            self.collection = None
+        
+        self.persist_directory = persist_directory
+    
+    def create_collection(self, name: str = "knowledge_base"):
+        """
+        Create or get a collection in the vector database.
+        Args:
+            name (str): Name of the collection
+        Returns:
+            Collection: Chroma collection object
+        """
+        if self.client is None:
+            logger.warning("ChromaDB client not available. Cannot create collection.")
+            return None
+            
+        try:
+            self.collection = self.client.create_collection(name=name)
+            logger.info(f"Created new collection: {name}")
+        except Exception as e:
+            logger.warning(f"Collection {name} might already exist: {e}")
+            self.collection = self.client.get_collection(name=name)
+            logger.info(f"Retrieved existing collection: {name}")
+        return self.collection
+    
+    def get_collection(self, name: str = "knowledge_base"):
+        """
+        Get an existing collection.
+        Args:
+            name (str): Name of the collection
+        Returns:
+            Collection: Chroma collection object
+        """
+        try:
+            self.collection = self.client.get_collection(name=name)
+            logger.info(f"Retrieved collection: {name}")
+        except Exception as e:
+            logger.error(f"Failed to get collection {name}: {e}")
+            raise
+        return self.collection
+    
+    def add_texts(self, texts, metadatas=None, ids=None):
+        """
+        Add texts to the vector store.
+        Args:
+            texts (list): List of text strings to embed and store
+            metadatas (list, optional): List of metadata dictionaries
+            ids (list, optional): List of IDs for the texts
+        """
+        if self.collection is None:
+            raise ValueError("No collection initialized. Call create_collection() first.")
+        try:
+            self.collection.add(
+                documents=texts,
+                metadatas=metadatas,
+                ids=ids
+            )
+            logger.info(f"Added {len(texts)} texts to collection")
+        except Exception as e:
+            logger.error(f"Failed to add texts to collection: {e}")
+            raise
+    
+    def search(self, query_text, n_results=5):
+        """
+        Search for similar texts using semantic similarity.
+        Args:
+            query_text (str): Text to search for
+            n_results (int): Number of results to return
+        Returns:
+            dict: Search results with documents, metadatas, and distances
+        """
+        if self.collection is None:
+            raise ValueError("No collection initialized. Call create_collection() first.")
+        try:
+            results = self.collection.query(
+                query_texts=[query_text],
+                n_results=n_results
+            )
+            logger.info(f"Search returned {len(results['ids'][0])} results")
+            return results
+        except Exception as e:
+            logger.error(f"Failed to search collection: {e}")
+            raise
 
 
 class HybridSearchEngine:
