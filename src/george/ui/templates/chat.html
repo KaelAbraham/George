@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chat with George - AI Writing Assistant</title>
+    <title>Chat - {{ project.name }} - George AI</title>
     <style>
         body { 
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
@@ -12,28 +12,49 @@
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
         }
-        .nav-bar {
-            background: rgba(0,0,0,0.1);
-            padding: 10px 20px;
+        
+        /* --- NEW: Styles for chat header --- */
+        .chat-header {
+            background-color: #333;
+            color: white;
+            padding: 15px 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            border-bottom: 1px solid #444;
         }
-        .nav-bar a {
+        .chat-header h1 {
+            margin: 0;
+            font-size: 1.4em;
             color: white;
+        }
+        .file-list {
+            font-size: 0.85em;
+            color: #ccc;
+            margin-top: 5px;
+        }
+        .file-list ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            gap: 15px;
+        }
+        .file-list li {
+            background-color: #555;
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+        .nav-actions a {
+            color: #ddd;
             text-decoration: none;
-            margin: 0 15px;
-            padding: 8px 16px;
-            border-radius: 5px;
-            transition: background 0.3s;
+            margin-left: 15px;
+            font-size: 0.9em;
         }
-        .nav-bar a:hover {
-            background: rgba(255,255,255,0.2);
+        .nav-actions a:hover {
+            color: white;
         }
-        .nav-bar .logo {
-            font-size: 1.2em;
-            font-weight: bold;
-        }
+        /* --- END NEW --- */
         #chat-container { 
             max-width: 900px; 
             height: 75vh; 
@@ -186,30 +207,35 @@
 </head>
 <body>
 
-<div class="nav-bar">
-    <div class="logo">🤖 George AI</div>
+{# --- NEW: Chat Header Section --- #}
+<div class="chat-header">
     <div>
-        <a href="/">Home</a>
-        <a href="/upload">Upload</a>
-        <a href="/chat" style="background: rgba(255,255,255,0.2);">Chat</a>
+        <h1>{{ project.name }}</h1>
+        <div class="file-list">
+            <span>Manuscript Files:</span>
+            {% if project.manuscript_files %}
+                <ul>
+                    {% for filename in project.manuscript_files %}
+                        <li>{{ filename }}</li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <span>No manuscript files uploaded yet.</span>
+            {% endif %}
+        </div>
+    </div>
+    <div class="nav-actions">
+        <a href="{{ url_for('project_manager.view_project', project_id=project.id) }}">Manage Files</a>
+        <a href="{{ url_for('project_manager.dashboard') }}">Back to Dashboard</a>
     </div>
 </div>
+{# --- END NEW --- #}
 
 <div id="chat-container">
     <div id="chat-header">
         <h1>🤖 George AI Assistant</h1>
         <div id="ai-status">
-            <span id="status-indicator">Connecting to AI...</span>
-            <div class="model-info" id="model-info"></div>
-        </div>
-                <div id="file-status" style="margin-bottom: 10px; padding: 10px; background: rgba(255,255,255,0.1); border-radius: 5px;">
-            <span id="file-indicator">📄 Checking file status...</span>
-            <button id="clear-file-btn" onclick="clearCurrentFile()" style="margin-left: 5px; padding: 4px 8px; background: rgba(255,0,0,0.2); border: 1px solid rgba(255,0,0,0.3); border-radius: 3px; color: white; cursor: pointer; font-size: 0.8em; display: none;">Clear File</button>
-            <button onclick="checkFileStatus()" style="margin-left: 5px; padding: 4px 8px; background: rgba(0,123,255,0.2); border: 1px solid rgba(0,123,255,0.3); border-radius: 3px; color: white; cursor: pointer; font-size: 0.8em;">Refresh Status</button>
-        </div>
-        <div id="processing-status" style="margin-bottom: 10px; padding: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; display: none;">
-            <span id="processing-indicator">⚙️ Processing manuscript...</span>
-            <div id="processing-progress" style="margin-top: 5px; font-size: 0.8em;"></div>
+            <span id="status-indicator">Ready to chat</span>
         </div>
     </div>
     <div id="messages">
@@ -232,265 +258,75 @@
     document.addEventListener('DOMContentLoaded', function() {
         const chatForm = document.getElementById('chat-form');
         const chatInput = document.getElementById('chat-input');
-        const sendBtn = document.getElementById('send-btn');
         const messagesContainer = document.getElementById('messages');
-        const statusIndicator = document.getElementById('status-indicator');
-        const modelInfo = document.getElementById('model-info');
+        const projectName = '{{ project_name }}'; // Get the project name from the template
 
-        // Check AI status on load
-        checkAIStatus();
-        checkFileStatus();
-        checkProcessingStatus();
-        
-        // Poll processing status every 5 seconds
-        setInterval(checkProcessingStatus, 5000);
-
-        chatForm.addEventListener('submit', function(event) {
+        chatForm.addEventListener('submit', async function(event) {
             event.preventDefault();
             const question = chatInput.value.trim();
             if (!question) return;
 
-            // Display user's message
             addMessage(question, 'user');
             chatInput.value = '';
             
-            // Disable input while processing
-            setLoading(true);
-            
-            // Show typing indicator
-            const typingId = addTypingIndicator();
+            const thinkingIndicator = addMessage('George is thinking...', 'ai', true);
 
-            // Send message to API
-            fetch('/api/chat', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ message: question })
-            })
-            .then(response => response.json())
-            .then(data => {
-                // Remove typing indicator
-                removeMessage(typingId);
-                
-                // Display AI response
-                if (data.response) {
-                    addMessage(data.response, 'ai', data.model);
-                } else {
-                    addMessage('Sorry, I didn\'t receive a proper response.', 'ai', null, true);
+            // --- SECURE API CALL WITH FIREBASE TOKEN ---
+            
+            // 1. Get the Firebase token from localStorage
+            const idToken = localStorage.getItem('firebaseIdToken');
+            if (!idToken) {
+                alert("Your session has expired. Please log in again.");
+                window.location.href = '/auth/login';
+                return;
+            }
+
+            // 2. Send the request to the new project-specific, secure endpoint
+            try {
+                const encodedProjectName = encodeURIComponent(projectName);
+                const response = await fetch(`/api/projects/${encodedProjectName}/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + idToken // Send the token for authentication
+                    },
+                    body: JSON.stringify({ 
+                        question: question
+                    })
+                });
+
+                if (response.status === 401) {
+                    alert("Authentication failed. Please log in again.");
+                    window.location.href = '/auth/login';
+                    return;
                 }
+
+                const data = await response.json();
                 
-                setLoading(false);
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                removeMessage(typingId);
-                addMessage('Sorry, I encountered an error processing your request.', 'ai', null, true);
-                setLoading(false);
-            });
+                // 3. Display the final answer
+                if (data.answer) {
+                    thinkingIndicator.querySelector('.content').textContent = data.answer;
+                    thinkingIndicator.querySelector('.content').classList.remove('thinking');
+                } else {
+                    thinkingIndicator.querySelector('.content').textContent = data.error || 'An unknown error occurred.';
+                    thinkingIndicator.querySelector('.content').classList.add('error');
+                }
+
+            } catch (error) {
+                console.error('Error with chat:', error);
+                thinkingIndicator.querySelector('.content').textContent = 'An error occurred while communicating with the server.';
+                thinkingIndicator.querySelector('.content').classList.add('error');
+            }
         });
 
-        function checkAIStatus() {
-            fetch('/api/ai/status')
-            .then(response => response.json())
-            .then(data => {
-                if (data.available) {
-                    statusIndicator.textContent = '✅ Connected to ' + data.service;
-                    statusIndicator.style.color = '#28a745';
-                    modelInfo.textContent = 'Model: ' + data.model;
-                } else {
-                    statusIndicator.textContent = '❌ AI Service Unavailable';
-                    statusIndicator.style.color = '#dc3545';
-                    modelInfo.textContent = data.error || 'Please check Ollama service';
-                }
-            })
-            .catch(error => {
-                statusIndicator.textContent = '❌ Connection Error';
-                statusIndicator.style.color = '#dc3545';
-                modelInfo.textContent = 'Failed to check AI status';
-            });
-        }
-
-        function addMessage(content, sender, model = null, isError = false) {
+        // Helper function to add messages to the chat window
+        function addMessage(text, sender, isThinking = false) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${sender}-message`;
-            messageDiv.id = 'msg-' + Date.now();
             
             const avatar = document.createElement('div');
             avatar.className = 'avatar';
             avatar.textContent = sender === 'user' ? '👤' : '🤖';
-            
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'content';
-            if (isError) contentDiv.className += ' error';
-            contentDiv.textContent = content;
-            
-            if (sender === 'user') {
-                messageDiv.appendChild(contentDiv);
-                messageDiv.appendChild(avatar);
-            } else {
-                messageDiv.appendChild(avatar);
-                messageDiv.appendChild(contentDiv);
-                
-                if (model) {
-                    const modelTag = document.createElement('div');
-                    modelTag.className = 'model-info';
-                    modelTag.textContent = `Generated by ${model}`;
-                    contentDiv.appendChild(modelTag);
-                }
-            }
-            
-            messagesContainer.appendChild(messageDiv);
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            
-            return messageDiv.id;
-        }
-
-        function addTypingIndicator() {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'message ai-message';
-            messageDiv.id = 'typing-' + Date.now();
-            
-            const avatar = document.createElement('div');
-            avatar.className = 'avatar';
-            avatar.textContent = '🤖';
-            
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'content';
-            contentDiv.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
-            
-            messageDiv.appendChild(avatar);
-            messageDiv.appendChild(contentDiv);
-            messagesContainer.appendChild(messageDiv);
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            
-            return messageDiv.id;
-        }
-
-        function removeMessage(messageId) {
-            const element = document.getElementById(messageId);
-            if (element) {
-                element.remove();
-            }
-        }
-
-        function setLoading(loading) {
-            sendBtn.disabled = loading;
-            chatInput.disabled = loading;
-            if (loading) {
-                sendBtn.textContent = 'Sending...';
-            } else {
-                sendBtn.textContent = 'Send';
-            }
-        }
-
-        function checkFileStatus() {
-            fetch('/api/file/current')
-            .then(response => response.json())
-            .then(data => {
-                const fileIndicator = document.getElementById('file-indicator');
-                const clearBtn = document.getElementById('clear-file-btn');
-                
-                if (data.loaded) {
-                    const wordCount = data.info.word_count || 0;
-                    fileIndicator.innerHTML = `📄 <strong>${data.filename}</strong> (${wordCount} words)`;
-                    fileIndicator.style.color = '#90EE90';
-                    clearBtn.style.display = 'inline-block';
-                } else {
-                    fileIndicator.innerHTML = '📄 No file loaded - upload to get personalized advice!';
-                    fileIndicator.style.color = '#FFB6C1';
-                    clearBtn.style.display = 'none';
-                }
-            })
-            .catch(error => {
-                document.getElementById('file-indicator').textContent = '📄 Error checking file status';
-            });
-        }
-
-        function checkProcessingStatus() {
-            fetch('/api/processing/status')
-            .then(response => response.json())
-            .then(data => {
-                const processingDiv = document.getElementById('processing-status');
-                const processingIndicator = document.getElementById('processing-indicator');
-                const processingProgress = document.getElementById('processing-progress');
-                
-                if (data.processing) {
-                    processingDiv.style.display = 'block';
-                    processingIndicator.innerHTML = `⚙️ ${data.message}`;
-                    processingProgress.innerHTML = `Progress: ${data.progress}%`;
-                } else if (data.status === 'complete') {
-                    processingDiv.style.display = 'block';
-                    processingDiv.style.background = 'rgba(0,255,0,0.1)';
-                    processingIndicator.innerHTML = `✅ ${data.message}`;
-                    processingProgress.innerHTML = 'Knowledge extraction complete! Queries will be fast now.';
-                } else {
-                    processingDiv.style.display = 'none';
-                }
-            })
-            .catch(error => {
-                console.error('Error checking processing status:', error);
-            });
-        }
-        
-        function clearCurrentFile() {
-            console.log('🔍 Clear file button clicked');
-            if (confirm('Clear the current file from memory? You can always upload it again.')) {
-                console.log('🔍 User confirmed clear - sending request');
-                fetch('/api/file/clear', { 
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                })
-                .then(response => {
-                    console.log('🔍 Clear response status:', response.status);
-                    return response.json();
-                })
-                .then(data => {
-                    console.log('🔍 Clear response data:', data);
-                    checkFileStatus();
-                    addMessage('File cleared from memory. Upload a new file to get personalized advice!', 'ai', null, false);
-                })
-                .catch(error => {
-                    console.error('🔍 Error clearing file:', error);
-                    addMessage('Error clearing file: ' + error.toString(), 'ai', null, false);
-                });
-            } else {
-                console.log('🔍 User cancelled clear operation');
-            }
-        }
-
-        // Auto-focus on input
-        chatInput.focus();
-    });
-</script>
-</body>
-</html>
-
-            // Display "thinking" indicator
-            const thinkingIndicator = addMessage('George is thinking...', 'ai', true);
-
-            // Send question to the backend
-            fetch(`/api/projects/${projectId}/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ question: question })
-            })
-            .then(response => response.json())
-            .then(data => {
-                // Replace "thinking" with the actual answer
-                thinkingIndicator.querySelector('.content').textContent = data.answer || 'I could not find an answer.';
-            })
-            .catch(error => {
-                console.error('Error with chat:', error);
-                thinkingIndicator.querySelector('.content').textContent = 'An error occurred. Please check the server logs.';
-            });
-        });
-
-        function addMessage(text, sender, isThinking = false) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${sender}-message`;
             
             const contentDiv = document.createElement('div');
             contentDiv.className = 'content';
@@ -500,13 +336,22 @@
                 contentDiv.classList.add('thinking');
             }
             
-            messageDiv.appendChild(contentDiv);
+            if (sender === 'user') {
+                messageDiv.appendChild(contentDiv);
+                messageDiv.appendChild(avatar);
+            } else {
+                messageDiv.appendChild(avatar);
+                messageDiv.appendChild(contentDiv);
+            }
+            
             messagesContainer.appendChild(messageDiv);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
             return messageDiv;
         }
+
+        // Auto-focus on input
+        chatInput.focus();
     });
 </script>
-
 </body>
 </html>

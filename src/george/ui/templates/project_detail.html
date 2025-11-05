@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ project.project_name }} - George AI</title>
+    <style>
+        body { font-family: sans-serif; background: #f4f4f4; margin: 0; }
+        .nav-bar { background: #333; color: white; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .nav-bar .user-info { font-size: 0.9em; }
+        #logout-btn { background: #dc3545; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; }
+        .container { max-width: 1000px; margin: 40px auto; padding: 20px; }
+        h1 { color: #333; }
+        .project-info { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .upload-section { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .files-list { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .btn { background: #007bff; color: white; padding: 12px 20px; border: none; border-radius: 5px; cursor: pointer; text-decoration: none; display: inline-block; margin: 5px; }
+        .btn-secondary { background: #6c757d; }
+        .btn-success { background: #28a745; }
+        input[type="file"] { margin: 10px 0; }
+        .file-item { padding: 10px; border-bottom: 1px solid #eee; }
+        .back-link { display: inline-block; margin-bottom: 20px; color: #007bff; text-decoration: none; }
+    </style>
+</head>
+<body>
+
+    <div class="nav-bar">
+        <div class="logo"><strong>George AI</strong> | Project Details</div>
+        <div class="user-info">
+            Logged in as: <strong>{{ user.email }}</strong>
+            <button id="logout-btn">Logout</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <a href="/projects/" class="back-link">← Back to Projects</a>
+        
+        <div class="project-info">
+            <h1>{{ project.project_name }}</h1>
+            <p><strong>Author:</strong> {{ project.author or 'Not specified' }}</p>
+            <p><strong>Description:</strong> {{ project.description or 'No description' }}</p>
+            <p><strong>Status:</strong> {{ project.processing_status or 'created' }}</p>
+            <p><strong>Created:</strong> {{ project.created_at }}</p>
+            <a href="/projects/{{ project_id }}/chat/" class="btn">Open Chat Interface</a>
+            <button class="btn btn-success generate-kb-btn" data-project-id="{{ project_id }}">Generate Knowledge Base</button>
+        </div>
+
+        <div class="upload-section">
+            <h2>Upload Manuscript</h2>
+            <form action="/projects/{{ project_id }}/upload" method="POST" enctype="multipart/form-data">
+                <input type="file" name="file" accept=".txt,.md,.doc,.docx" required>
+                <button type="submit" class="btn">Upload File</button>
+            </form>
+        </div>
+
+        <div class="files-list">
+            <h2>Manuscripts</h2>
+            {% if project.manuscripts and project.manuscripts|length > 0 %}
+                {% for manuscript in project.manuscripts %}
+                    <div class="file-item">
+                        📄 {{ manuscript }}
+                    </div>
+                {% endfor %}
+            {% else %}
+                <p>No manuscript files uploaded yet.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+        // Initialize Firebase
+        const firebaseConfig = {
+            apiKey: "AIzaSyDjEL-kKfS3OaTvqCGzlW9mD95QpRKLZ8k",
+            authDomain: "george-6a8da.firebaseapp.com",
+            projectId: "george-6a8da",
+            storageBucket: "george-6a8da.firebasestorage.app",
+            messagingSenderId: "1082853267992",
+            appId: "1:1082853267992:web:8f8b0bd6b1d6d1c6c35d62"
+        };
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+
+        document.getElementById('logout-btn').addEventListener('click', () => {
+            signOut(auth).then(() => {
+                localStorage.removeItem('firebaseIdToken');
+                window.location.href = '/auth/login';
+            }).catch((error) => {
+                console.error('Logout Failed:', error);
+                alert('Logout failed. Please try again.');
+            });
+        });
+
+        // Handle Generate KB Button
+        const generateBtn = document.querySelector('.generate-kb-btn');
+        console.log('Generate button found:', generateBtn);
+        if (generateBtn) {
+            generateBtn.addEventListener('click', async () => {
+                console.log('Generate KB button clicked!');
+                const projectId = generateBtn.dataset.projectId;
+                console.log('Project ID:', projectId);
+                generateBtn.disabled = true;
+                generateBtn.textContent = 'Processing...';
+
+                const idToken = localStorage.getItem('firebaseIdToken');
+                if (!idToken) {
+                    alert("Authentication error. Please log in again.");
+                    window.location.href = '/auth/login';
+                    return;
+                }
+
+                try {
+                    const encodedProjectId = encodeURIComponent(projectId);
+                    const response = await fetch(`/api/projects/${encodedProjectId}/process`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': 'Bearer ' + idToken,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok && data.status === 'success') {
+                        alert(`Success! ${data.message}`);
+                        location.reload();
+                    } else {
+                        alert(`Error: ${data.error || 'Unknown error'}`);
+                        generateBtn.disabled = false;
+                        generateBtn.textContent = 'Generate Knowledge Base';
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    alert('Network error during processing.');
+                    generateBtn.disabled = false;
+                    generateBtn.textContent = 'Generate Knowledge Base';
+                }
+            });
+        }
+    </script>
+
+</body>
+</html>

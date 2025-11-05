@@ -1,51 +1,89 @@
 # Character Profile: Grandma Grace
 
-**Mention Count:** 3
-**First Appearance:** Character position 28391
+**Total Mentions:** 3
+**First Appearance:** Position 28391
 
-## Profile
+---
 
-Okay, here's a comprehensive character profile for Grandma Grace, based on the provided analysis:
+Okay, here is a comprehensive character profile for Grandma Grace, synthesized from the provided observations:
 
-**Character Profile: Grandma Grace**
+## Grandma Grace: Character Profile
 
-*   **Physical Description:**
-    *   *Unknown.* No physical details are mentioned in the excerpt.
+**## Physical Description**
 
-*   **Personality:**
-    *   Generous: Willing to financially support Edie Ann's project using her inheritance.
-    *   Influential: Her doctors' approval is necessary, suggesting she's either under their care or they highly value her well-being.
-    *   Pragmatic (Implied): Likely instilled a "get it paid for first" mentality in her children, suggesting a practical approach to life.
+*   None explicitly stated.
 
-*   **Relationships:**
-    *   Edie Ann Sinclair: Grandmother, willing to let Edie Ann use her inheritance.
-    *   Hugh: Mother, whose reaction implies surprise at her agreement to fund the project.
-    *   Doctors: Hold significant influence over her decisions or well-being.
+**## Personality & Character**
 
-*   **Key Moments/Actions:**
-    *   Agreed to fund Edie Ann's "Net" project using her inheritance.
-    *   Her doctors must approve the design of the project.
-    *   Has been aware of the project for approximately a month.
+*   **Wealthy:** Controls a significant inheritance that Edie Ann can access.
+*   **Generous:** Willing to use her wealth to support her granddaughter's desires and cybernetic enhancements.
+*   **Independent:** Makes decisions regarding Edie Ann's enhancements without consulting Hugh, her son, indicating a level of autonomy.
+*   **Influential:** Has a network of doctors whose approval is required for the enhancement design, suggesting access to medical expertise and resources.
+*   **Discreet:** Kept the plans for Edie Ann's enhancements secret from Hugh for a month.
+*   **Supportive:** Actively supports Edie Ann's desire for cybernetic enhancements.
+*   **Caring:** Implied concern for Edie Ann's well-being, as she requires her doctors to approve the design, ensuring safety and quality.
+*   **Strategic:** Edie Ann seems to have learned from Linda to get what you want paid for first.
 
-*   **Character Arc:**
-    *   *Limited information.* The excerpt doesn't provide enough information to determine a character arc. However, her willingness to fund the project could be the start of a supportive role in Edie Ann's life, depending on how the project progresses.
+**## Relationships**
 
-## Raw Mentions
+*   **Edie Ann:** Grandmother. Supportive and financially generous towards Edie Ann, enabling her cybernetic enhancements.
+*   **Hugh Sinclair:** Son. The relationship appears strained, as she has been planning Edie Ann's enhancements without his knowledge or consent. He is shocked to learn of her involvement.
 
-Here's an analysis of Grandma Grace based on the excerpt:
+**## Actions & Key Moments**
 
-1.  **Physical Descriptions:**
-    *   None explicitly mentioned.
-2.  **Personality Traits:**
-    *   Generous: Willing to fund Edie Ann's Net project.
-    *   Influential: Her approval is needed by her doctors for the project.
-    *   Wise/Pragmatic (implied): Edie Ann says her mom advises to "get what you want, get it paid for first," suggesting Grandma Grace might have instilled this value.
-3.  **Relationships with other characters:**
-    *   Grandmother to Edie Ann Sinclair: Willing to use Edie Ann's inheritance.
-    *   Mother to Hugh: Hugh is shocked she agreed to fund the project.
-4.  **Key actions or events:**
-    *   Agreed to let Edie Ann use her inheritance for the Net project.
-    *   Her doctors need to approve the design.
-    *   Has known about the project for about a month.
-5.  **Notable dialogue:**
-    *   None directly spoken by Grandma Grace in this excerpt.
+*   Agreed to let Edie Ann use her inheritance to pay for cybernetic enhancements.
+*   Required that her doctors approve the design of the enhancements.
+*   Has been involved in the planning of Edie Ann's cybernetic enhancements for "two or three decadays" (a month).
+*   Had a design created for Edie Ann's enhancements, as indicated by "Per Mrs. Sinclairs..." on a tablet.
+
+**## Dialogue & Voice**
+
+*   No direct dialogue is provided.
+*   Indirectly quoted: Edie Ann states, "Grandma Grace said she would let me use my inheritance as long as her doctors approve the design." This shows her conditions for providing financial support.
+*   Mentioned in the phrase: "Per Mrs. Sinclairs..." (referring to information on a tablet related to the design). This implies a level of formality and professionalism in her dealings.
+
+**## Character Development**
+
+*   No character development can be assessed based on the current information. Future interactions and revelations could shed light on her motivations and any potential changes in her relationships or behavior.
+
+---
+
+## Detailed Observations by Section
+
+Okay, here's a comprehensive character profile for Grandma Grace based on the provided text:
+
+## Grandma Grace: Character Profile
+
+**PHYSICAL DESCRIPTIONS**:
+
+*   None explicitly stated.
+
+**ACTIONS**:
+
+*   She agreed to let Edie Ann use her inheritance to pay for the cybernetic enhancements, as long as "her doctors approve the design."
+*   She has been involved in the planning of Edie Ann's cybernetic enhancements for "two or three decadays" (a month).
+*   She had a design created for Edie Ann's enhancements.
+
+**DIALOGUE**:
+
+*   None directly spoken.
+*   Indirectly quoted: Edie Ann states, "Grandma Grace said she would let me use my inheritance as long as her doctors approve the design."
+*   Mentioned in the phrase: "Per Mrs. Sinclairs..." (referring to information on a tablet related to the design).
+
+**THOUGHTS/FEELINGS**:
+
+*   None explicitly stated. Implied that she cares about Edie Ann's well-being, as she requires her doctors to approve the design.
+
+**RELATIONSHIPS**:
+
+*   **Edie Ann:** Grandmother. Supportive of Edie Ann's desires, willing to provide financial assistance.
+*   **Hugh Sinclair:** Mother. It is implied that their relationship may be strained, as Hugh is shocked that she has been involved in this process without his knowledge. Edie Ann seems to have learned from Linda to get what you want paid for first.
+
+**CHARACTERIZATION**:
+
+*   **Wealthy:** Has an inheritance that Edie Ann can use to pay for expensive cybernetic enhancements.
+*   **Generous:** Willing to use her wealth to support her granddaughter's desires.
+*   **Independent:** Makes decisions without consulting Hugh, her son.
+*   **Influential:** Has doctors who need to approve the design, suggesting she has access to medical expertise and resources.
+*   **Discreet:** Kept the plans secret from Hugh for a month.
+*   **Supportive:** Supports Edie Ann's desire for cybernetic enhancements.

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Server Error - George AI</title>
+    <style>
+        body { font-family: sans-serif; background: #f4f4f4; color: #333; text-align: center; padding-top: 50px; }
+        .container { max-width: 600px; margin: auto; padding: 20px; }
+        h1 { color: #ffc107; } /* Yellow/Orange */
+        a { color: #007bff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>500 - Internal Server Error</h1>
+        <p>Sorry, something went wrong on our end.</p>
+        <p>We've been notified and are looking into it. Please try again later.</p>
+        <p><a href="{{ url_for('project_manager.dashboard') }}">Return to Dashboard</a></p>
+    </div>
+</body>
+</html>

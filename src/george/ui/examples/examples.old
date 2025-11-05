@@ -1,0 +1,78 @@
+"""
+Demonstration script for the AKG (Automatic Knowledge Generator) module
+"""
+import sys
+import os
+# Add the src directory to the path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+from akg.core.entity_extractor import EntityExtractor
+from akg.entities.classifier import EntityClassifier
+from akg.core.candidate_generator import CandidateGenerator
+from akg.core.entity_merger import EntityMerger
+def main():
+    print("=== AKG (Automatic Knowledge Generator) Demo ===\n")
+    # Sample manuscript text for demonstration
+    sample_text = """
+    Captain James Bond walked into the MI6 headquarters in London on a rainy Tuesday morning. 
+    He met with M, the head of the secret service, and his trusted ally Q in the briefing room. 
+    "Bond, we have a critical mission for you," M said seriously. 
+    "The villainous organization SPECTRE is planning something terrible."
+    Later that day, Bond flew to Monte Carlo where he encountered the mysterious woman named Solitaire. 
+    She had psychic abilities that made her invaluable to SPECTRE. Bond knew he had to win her trust.
+    In his hotel room, Bond reviewed the intelligence dossier. It mentioned key locations like Paris, 
+    where he had previously encountered the criminal mastermind Ernst Stavro Blofeld. 
+    The document also referenced other agents: Felix Leiter from the CIA and Camille Montes.
+    As Bond sipped his martini, he reflected on his past adventures in places like Jamaica, 
+    where he first faced the dangers of the Cold War era espionage world.
+    """
+    print("Sample manuscript text loaded.\n")
+    # 1. Entity Extraction
+    print("1. Extracting entities using spaCy NER...")
+    extractor = EntityExtractor()
+    entities = extractor.extract_entities(sample_text)
+    print(f"   Found {len(entities)} entities from spaCy NER.")
+    # Display some extracted entities
+    print("   Sample extracted entities:")
+    for i, entity in enumerate(entities[:5]):  # Show first 5
+        print(f"     - {entity['text']} ({entity['label']}) in sentence: {entity['sentence'][:50]}...")
+    # 2. Entity Classification
+    print("\n2. Classifying entities into categories...")
+    classifier = EntityClassifier()
+    classified_entities = classifier.classify_entities(entities)
+    # Group by category
+    grouped_entities = classifier.group_by_category(classified_entities)
+    print("   Entities grouped by category:")
+    for category, entity_list in grouped_entities.items():
+        print(f"     - {category}: {len(entity_list)} entities")
+    # 3. Candidate Generation with Confidence Scoring
+    print("\n3. Generating entity candidates with confidence scores...")
+    generator = CandidateGenerator()
+    candidates = generator.generate_candidates(sample_text, classified_entities)
+    print(f"   Generated {len(candidates)} candidates with confidence scores.")
+    print("   Top candidates by confidence:")
+    sorted_candidates = sorted(candidates, key=lambda x: x.get('confidence', 0), reverse=True)
+    for i, candidate in enumerate(sorted_candidates[:5]):  # Show top 5
+        print(f"     - {candidate['text']} (confidence: {candidate['confidence']})")
+    # 4. Entity Deduplication and Merging
+    print("\n4. Finding potential entity merge candidates...")
+    merger = EntityMerger()
+    entities_with_suggestions = merger.find_merge_candidates(candidates)
+    # Count entities that need review
+    entities_needing_review = [e for e in entities_with_suggestions if e.get('needs_review', False)]
+    print(f"   Found {len(entities_needing_review)} entities that may need merging.")
+    if entities_needing_review:
+        print("   Sample entities with merge suggestions:")
+        for i, entity in enumerate(entities_needing_review[:3]):  # Show first 3
+            print(f"     - {entity['text']}")
+            if 'merge_suggestions' in entity:
+                for suggestion in entity['merge_suggestions'][:2]:  # Show max 2 suggestions
+                    print(f"       * Potential match: {suggestion['text']} (similarity: {suggestion.get('similarity_score', 0)})")
+    print("\n=== Demo completed successfully! ===")
+    print("\nThis demo showed the core functionality of the AKG module:")
+    print("- Entity extraction using spaCy NER")
+    print("- Entity classification into semantic categories")
+    print("- Candidate generation with confidence scoring")
+    print("- Entity deduplication and merge suggestions")
+    return True
+if __name__ == "__main__":
+    main()

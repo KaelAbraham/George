@@ -4,11 +4,11 @@
 
 ## Description
 
-Here's an analysis of "Mom" in the provided context:
+Okay, here's an analysis of the term "Mom" based on the provided context:
 
-1.  **Refers to:** Linda Rivera, Edie Ann's mother and Hugh's wife. Also granGillan's daughter.
-2.  **Significance:** She is a parental figure, has strong opinions on Edie Ann's augmentations, and is respected.
-3.  **How it's used:** Used to address Linda directly, and in reference to her role as a parent and wife.
+1.  **Refers to:** Linda Rivera, Edie Ann's mother and Hugh Gilpin's wife. Also, granGillan's daughter.
+2.  **Significance:** Represents a maternal figure, a point of potential conflict regarding Edie Ann's augmentations, and a figure of respect (as seen with "La Partigiana").
+3.  **How it's used:** Often invoked by Edie Ann when seeking permission or leverage. Also used by Hugh in the context of parental decisions.
 
 ## Example Contexts
 

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your Dashboard - George AI</title>
+    <style>
+        body { font-family: sans-serif; background: #f4f4f4; margin: 0; padding: 0; }
+        .nav-bar { background: #333; color: white; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .nav-bar .user-info { font-size: 0.9em; display: flex; align-items: center; }
+        .nav-bar .logo a { color: white; text-decoration: none; font-weight: bold; font-size: 1.2em;}
+        #logout-btn { background: #dc3545; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; margin-left: 15px; }
+        .container { max-width: 1100px; margin: 30px auto; padding: 0 15px; }
+        h1 { color: #333; margin-bottom: 20px; }
+        .project-card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.08); margin-bottom: 25px; border-left: 5px solid #007bff; }
+        .project-card h2 { margin-top: 0; color: #0056b3; }
+        .project-actions { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center;}
+        .new-project-btn { display: inline-block; background: #007bff; color: white; padding: 12px 20px; text-decoration: none; border-radius: 5px; margin-bottom: 20px; transition: background-color 0.2s; }
+        .new-project-btn:hover { background: #0056b3; }
+        .btn { padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; font-size: 0.9em; transition: background-color 0.2s; color: white; text-decoration: none; display: inline-block; }
+        .btn:disabled { background-color: #ccc; cursor: not-allowed; }
+        .generate-kb-btn { background-color: #17a2b8; }
+        .generate-kb-btn:hover:not(:disabled) { background-color: #117a8b; }
+        .add-files-btn { background-color: #ffc107; color: #333;}
+        .add-files-btn:hover:not(:disabled) { background-color: #e0a800; }
+        .btn-chat { background-color: #28a745; }
+        .btn-chat:hover { background-color: #1e7e34; }
+        .btn-manage-files { background-color: #6c757d; }
+        .btn-manage-files:hover { background-color: #5a6268; }
+        .status-text { font-weight: bold; }
+        .status-created { color: #6c757d; }
+        .status-processing { color: #fd7e14; }
+        .status-ready { color: #28a745; }
+        .status-error { color: #dc3545; }
+        .kb-status { font-style: italic; font-size: 0.9em; }
+        .flash-message { padding: 15px; margin-bottom: 20px; border-radius: 5px; }
+        .flash-message.error { color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; }
+        .flash-message.success { color: #155724; background-color: #d4edda; border: 1px solid #c3e6cb;}
+        .unavailable-text { color: #999; }
+    </style>
+</head>
+<body>
+
+    <div class="nav-bar">
+        <div class="logo"><a href="{{ url_for('project_manager.dashboard') }}"><strong>George AI</strong> | Dashboard</a></div>
+        {% if user %}
+        <div class="user-info">
+            Logged in as: <strong>{{ user.email }}</strong>
+            <button id="logout-btn">Logout</button>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="container">
+        <h1>Your Projects</h1>
+        
+        {# Display Flash Messages #}
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash-message {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <p><a href="{{ url_for('project_manager.create_project') }}" class="new-project-btn">Create New Project</a></p>
+        
+        <div id="projects-list">
+            {% if projects %}
+                {% for project in projects %}
+                    {# Ensure project is a dictionary before accessing keys #}
+                    {% if project is mapping %} 
+                        <div class="project-card" data-project-id="{{ project.id }}">
+                            <h2>{{ project.name }}</h2>
+                            <p>{{ project.description or 'No description.' }}</p>
+                            
+                            {# --- Display Project Status --- #}
+                            {% set status = project.processing_status or project.status or 'Unknown' %}
+                            {% set status_display = status | replace('_', ' ') | title %}
+                            {% set status_class = 'status-' + status | lower | replace('_', '-') %}
+                            <p><strong>Status:</strong> 
+                               <span class="{{ status_class }} status-text">
+                                   {{ status_display }}
+                               </span>
+                            </p>
+                            
+                            <div class="project-actions">
+                                {# --- Manage Files Button --- #}
+                                <a href="{{ url_for('project_manager.view_project', project_id=project.id) }}" class="btn btn-manage-files">Manage Files</a>
+                                
+                                {# --- Link to Chat --- #}
+                                {% if status == 'ready' %} 
+                                    <a href="{{ url_for('chat.chat_interface', project_id=project.id) }}" class="btn btn-chat">Open Project & Chat</a>
+                                {% else %}
+                                    <span class="unavailable-text">Chat unavailable until KB is generated.</span>
+                                {% endif %}
+                                
+                                {# --- Dynamic KB Action Button --- #}
+                                <div class="kb-actions" style="display: inline-block;">
+                                    {% if status == 'created' or status == 'error' or status == 'Unknown' %} 
+                                        <button class="btn generate-kb-btn">Generate Knowledge Base</button>
+                                    {% elif status == 'processing' %}
+                                         <button class="btn generate-kb-btn" disabled>Processing KB...</button>
+                                    {% elif status == 'ready' %}
+                                         <button class="btn add-files-btn" disabled title="Add Files functionality coming soon">Add Files to Knowledge Base</button>
+                                    {% else %}
+                                         <button class="btn generate-kb-btn">Generate Knowledge Base</button>
+                                    {% endif %}
+                                    <span class="kb-status"></span>
+                                </div>
+                            </div>
+                        </div>
+                    {% else %}
+                        <div class="project-card">Error loading project data.</div>
+                    {% endif %}
+                {% endfor %}
+            {% else %}
+                <p>You haven't created any projects yet. Get started by creating a new one!</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <script type="module">
+        // Import Firebase modules
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+        // Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyDXtKsm3KwmBIQnrhzjJtEo-MvlfgLAn34",
+            authDomain: "george-6a8da.firebaseapp.com",
+            projectId: "george-6a8da",
+            storageBucket: "george-6a8da.firebasestorage.app",
+            messagingSenderId: "927164112653",
+            appId: "1:927164112653:web:fa22500beaeebaccd49a44",
+            measurementId: "G-RQLXB7BBHR"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+
+        // Logout Button Handler
+        const logoutBtn = document.getElementById('logout-btn');
+        if (logoutBtn) {
+            logoutBtn.addEventListener('click', () => {
+                signOut(auth).then(() => {
+                    localStorage.removeItem('firebaseIdToken');
+                    window.location.href = '/auth/login';
+                }).catch((error) => {
+                    console.error('Logout Failed:', error);
+                    alert('Logout failed. Please try again.');
+                });
+            });
+        }
+
+        // Generate KB Button Handlers
+        document.querySelectorAll('.generate-kb-btn').forEach(button => {
+            button.addEventListener('click', async (event) => {
+                const projectCard = event.target.closest('.project-card');
+                const projectId = projectCard.dataset.projectId;
+                const statusSpan = projectCard.querySelector('.kb-status');
+                const clickedButton = event.target; 
+
+                clickedButton.disabled = true; 
+                clickedButton.textContent = 'Processing...';
+                statusSpan.textContent = 'Starting generation...';
+                statusSpan.style.color = 'orange';
+
+                const idToken = localStorage.getItem('firebaseIdToken');
+                if (!idToken) {
+                    alert("Authentication error. Please log in again.");
+                    window.location.href = '/auth/login';
+                    return;
+                }
+
+                try {
+                    // URL encode the project ID to handle spaces and special characters
+                    const encodedProjectId = encodeURIComponent(projectId);
+                    
+                    const response = await fetch(`/api/projects/${encodedProjectId}/process`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': 'Bearer ' + idToken,
+                            'Content-Type': 'application/json' 
+                        }
+                    });
+
+                    // Update status text based on initial response
+                    if (response.status === 200 || response.status === 202) {
+                       statusSpan.textContent = 'KB Generation in progress...'; 
+                    } else if (response.status === 401) {
+                        alert("Authentication failed. Please log in again.");
+                        window.location.href = '/auth/login';
+                        return;
+                    } else {
+                        const errorData = await response.json();
+                        statusSpan.textContent = `Error starting: ${errorData.error || response.statusText}`;
+                        statusSpan.style.color = 'red';
+                        clickedButton.disabled = false; 
+                        clickedButton.textContent = 'Generate Knowledge Base';
+                        return;
+                    }
+
+                    const data = await response.json(); 
+
+                    if (response.ok && (data.status === 'success' || data.status === 'started')) {
+                        statusSpan.textContent = `Processing started: ${data.message || 'Check back soon.'}`;
+                        statusSpan.style.color = 'green';
+                        // Refresh after 5 seconds to show updated status
+                        setTimeout(() => { window.location.reload(); }, 5000);
+                    } else {
+                        statusSpan.textContent = `Error: ${data.error || 'Unknown processing error'}`;
+                        statusSpan.style.color = 'red';
+                        clickedButton.disabled = false; 
+                        clickedButton.textContent = 'Generate Knowledge Base';
+                    }
+
+                } catch (error) {
+                    console.error('Error triggering KB generation:', error);
+                    statusSpan.textContent = 'Network error. Please try again.';
+                    statusSpan.style.color = 'red';
+                    clickedButton.disabled = false; 
+                    clickedButton.textContent = 'Generate Knowledge Base';
+                }
+            });
+        });
+    </script>
+
+</body>
+</html>

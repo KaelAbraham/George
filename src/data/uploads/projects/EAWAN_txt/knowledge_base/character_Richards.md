@@ -5,195 +5,188 @@
 
 ## Profile
 
-Okay, here's a comprehensive character profile for Richards, based on all the provided excerpts:
+Okay, here's a comprehensive character profile for Dr. Trenton Richards, compiled from all the provided excerpts:
 
-**Character Profile: Richards**
+**Dr. Trenton Richards - Character Profile**
 
-*   **Physical Description:**
-    *   Tall
-    *   Dark-haired
-    *   Wears a tailored lab coat
-    *   Smiling
+**Physical Description:**
 
-*   **Personality:**
-    *   Polite and welcoming
-    *   Diplomatic and careful in his speech
-    *   Persuasive and explanatory
-    *   Enthusiastic about his work and designs
-    *   Calm under pressure
-    *   Reassuring
-    *   Respectful of wealth and power
-    *   Potentially overzealous, promising "nothing but the best"
-    *   Somewhat sheepish and easily flustered
-    *   Slightly playful/teasing
+*   Tall
+*   Dark-haired
+*   Wears a tailored lab coat
 
-*   **Relationships:**
-    *   Chief Medical Officer at ScioNetics (supervisory role)
-    *   Doctor to Edie Ann (patient)
-    *   Respectful towards the Sinclair family (acknowledges their status)
-    *   Specifically addresses Linda Rivera as "La Partigiana" showing respect.
-    *   Professional relationship with Hugh and Linda (possibly colleagues or family members)
-    *   Authority figure to the group (including the narrator, Linda, Hugh, and Edie Ann)
-    *   Seems to want to please Edie Ann
+**Personality:**
 
-*   **Key Moments/Actions:**
-    *   Greets Edie Ann and her family upon arrival at ScioNetics
-    *   Offers to give them a tour of the facility
-    *   Demonstrates the gravity-controlling bed.
-    *   Explains Edie Ann's procedure and enhancements.
-    *   Walks the group to the patient suite.
-    *   Designed Edie Ann's "Net"
-    *   Presents the design on a screen
-    *   Hands Hugh a tablet
-    *   Presents a report certifying approval for Edie Ann's procedure.
-    *   Designed the procedure for Edie Ann.
-    *   Answers questions about the procedure.
-    *   Informs Linda and the narrator that Edie Ann is awake and the operation went fine.
-    *   Examines Edie Ann when she says she can't see.
-    *   Offers to turn on Edie Ann's other sensors.
+*   **Polite and Respectful:** Uses honorifics, bows, and acknowledges status.
+*   **Professional:** Maintains a professional demeanor in all interactions.
+*   **Persuasive/Diplomatic:** Attempts to reassure patients and their families.
+*   **Forward-Thinking:** Embraces technological advancements and change ("We must change with the times").
+*   **Calm and Reassuring:** Maintains a calm presence, especially in stressful situations.
+*   **Explanatory and Patient:** Clearly explains complex procedures and information.
+*   **Knowledgeable:** Provides detailed reports and answers questions thoroughly.
+*   **Accommodating:** Sends files, considers requests, and aims to please.
+*   **Respectful (of Tradition):** Incorporates Sinclair colors into the Net design.
+*   **Slightly Sheepish/Flustered:** Shows brief moments of discomfort when dealing with family drama.
+*   **A bit teasing or playful:** ("I'm getting there," he replied, when Edie Ann urges him to explain her abilities)
 
-*   **Character Arc:**
+**Relationships:**
 
-    *   Based on the provided information, Richards doesn't exhibit a clear character arc. He consistently presents as a competent, if somewhat eager, professional dedicated to his work and his patients. He is capable in a crisis, and dedicated to his patients.
+*   **Chief Medical Officer at ScioNetics:** Holds a position of authority.
+*   **Doctor to Edie Ann Sinclair:** Oversees her enhancements and medical care.
+*   **Professional Relationship with Linda (La Partigiana) and Hugh Sinclair:** Communicates with them regarding Edie Ann's care.
+*   **Respectful of the Families:** Acknowledges their status and importance.
+*   **Seeks approval from Mrs. Sinclair's doctors:** Indicating a hierarchical structure or respect for other medical opinions.
+
+**Key Moments/Actions:**
+
+*   Greets Edie Ann and her family upon arrival at ScioNetics.
+*   Offers a tour of the facility.
+*   Explains ScioNetics' mission and interest in working with the Families.
+*   Demonstrates the gravity-controlling bed.
+*   Explains Edie Ann's upcoming procedure and enhancements in detail.
+*   Presents the Net design and its sensory capabilities.
+*   Certifies approval of reports and sends files.
+*   Answers questions about Edie Ann's treatment and recovery timeline.
+*   Informs Linda and Hugh that Edie Ann is awake and the operation went fine.
+*   Examines Edie Ann and offers to turn on her other sensors.
+
+**Character Arc:**
+
+*   While the excerpts don't show a dramatic arc, there's a subtle shift from a purely professional demeanor to showing occasional moments of sheepishness or being flustered. This suggests a growing sense of involvement or perhaps discomfort with the family dynamics surrounding Edie Ann's care. He seems to become more comfortable and perhaps more empathetic over time.
 
 ## Raw Mentions
 
-Okay, here's an analysis of Richards based solely on the provided excerpt:
+Okay, here's an analysis of the provided excerpt regarding the character Richards:
 
-1.  **Physical Descriptions:**
+1.  **Physical descriptions:**
     *   Tall
     *   Dark-haired
     *   Wears a tailored lab coat
 
-2.  **Personality Traits:**
-    *   Polite and welcoming (greets Edie Ann and her family warmly)
-    *   Diplomatic (careful in his speech to avoid offending Hugh)
-    *   Persuasive (attempts to convince Hugh of the benefits of ScioNetics' technology)
+2.  **Personality traits:**
+    *   Polite and respectful (bows, uses honorifics)
+    *   Professional
+    *   Persuasive/Diplomatic (attempts to reassure Hugh)
+    *   Forward-thinking ("We must change with the times")
 
-3.  **Relationships with Other Characters:**
-    *   Chief Medical Officer at ScioNetics (supervisory role)
-    *   Respectful towards the Sinclair family (acknowledges their status)
-    *   Specifically addresses Linda Rivera as "La Partigiana" showing respect.
+3.  **Relationships with other characters:**
+    *   Chief Medical Officer at ScioNetics
+    *   Greets Edie Ann and her family
+    *   Acknowledges Linda's status ("La Partigiana")
+    *   Acknowledges Hugh's family status
 
-4.  **Key Actions or Events:**
+4.  **Key actions or events:**
     *   Greets Edie Ann and her family upon arrival at ScioNetics
-    *   Offers to give them a tour of the facility
+    *   Offers a tour of the facility
+    *   Explains ScioNetics' mission and their interest in working with the Families, particularly the Sinclairs.
 
-5.  **Notable Dialogue:**
+5.  **Notable dialogue:**
     *   "Miss Edith Ann, a pleasure to see you. Who did you bring with you today?"
     *   "La Partigiana, it is an honor."
+    *   "Mr. Sinclair, it is a pleasure to meet you all. I am Dr. Trenton Richards, the Chief Medical Officer at ScioNetics."
     *   "We must change with the times."
+    *   "A Sinclair would be a shining example of what the best born can do with the best enhancements."
     *   "I am excited to show you around."
 
-Here's an analysis of Richards based on the provided excerpt:
+Okay, here's an analysis of the provided excerpt regarding the character Richards:
 
-1.  **Physical Descriptions:**
-    *   None explicitly mentioned.
+1.  **Physical descriptions:**
+    *   None in this excerpt.
 
-2.  **Personality Traits:**
-    *   Smiling
-    *   Explanatory
-    *   Calm
-    *   Slightly playful/teasing (e.g., with the bed demonstration)
+2.  **Personality traits:**
+    *   Calm and reassuring ("Dr. Richards smiled.")
+    *   Explanatory and patient ("One advantage of being on a space station," he said. and explaining the procedure to Edie Ann and the others)
+    *   A bit teasing or playful ("I'm getting there," he replied, when Edie Ann urges him to explain her abilities)
 
-3.  **Relationships with Other Characters:**
-    *   Authority figure to the group (including the narrator, Linda, Hugh, and Edie Ann)
-    *   In charge of Edie Ann's procedure
-    *   Responds to Edie Ann's eagerness
+3.  **Relationships with other characters:**
+    *   In a position of authority and expertise over Edie Ann, Linda, Hugh and the narrator (giving instructions, explaining procedures).
 
-4.  **Key Actions/Events:**
+4.  **Key actions or events:**
     *   Demonstrates the gravity-controlling bed.
-    *   Explains Edie Ann's procedure and enhancements.
-    *   Walks the group to the patient suite.
+    *   Explains Edie Ann's upcoming procedure and enhancements.
 
-5.  **Notable Dialogue:**
-    *   "One advantage of being on a space station... Lie in it."
-    *   "Within the surgical field, we have precise control of the gravity and 360° access to the patient."
-    *   "This is where you will start and return to after the procedure."
-    *   "There are some significant differences between how your augmentations were installed and operate, and what we will use."
+5.  **Notable dialogue:**
+    *   "One advantage of being on a space station."
+    *   "Lie in it,"
+    *   "Within the surgical field, we have precise control of the gravity and 360° access to the patient,"
+    *   "This is where you will start and return to after the procedure,"
     *   "Miss Edith Ann will have significant enhancements to the major muscle groups, improved organ functions, a biocatalytic fuel cell and access to additional sensors."
-    *   "It will make more sense if I tell them why first."
     *   "Instead of completely synthetic muscles, Miss Edith Ann will have synthetic muscle fibers woven into her existing muscles."
-    *   "...her Net will always be on."
+    *   "It would, but her Net will always be on,"
 
-Okay, here's an analysis of Richards based solely on the provided excerpt:
+Here's an analysis of the excerpt regarding Richards:
 
-1.  **Physical Descriptions:**
-    *   None explicitly mentioned.
+1.  **Physical descriptions:**
+    *   None in this excerpt.
 
-2.  **Personality Traits:**
-    *   Explanatory
-    *   Enthusiastic (about his design)
-    *   Somewhat Sheepish
-    *   Reassuring
-    *   Potentially Overzealous (promises "nothing but the best")
-    *   Easily Flustered
+2.  **Personality traits:**
+    *   Knowledgeable and Explanatory: Explains the Net's design and function in detail.
+    *   Reassuring: Promises Edith Ann will have the best care and be safe.
+    *   Slightly Sheepish: Shows a brief moment of sheepishness.
+    *   Flustered: Becomes flustered by the family drama.
 
-3.  **Relationships with Other Characters:**
-    *   Doctor to Edie Ann (patient)
-    *   Seems to want to please Edie Ann
-    *   Professional relationship with Hugh and Linda (possibly colleagues or family members)
+3.  **Relationships:**
+    *   Doctor to Edie Ann: Involved in Edie Ann's Net design and care.
+    *   Professional relationship with Hugh and Linda: Presents the Net design to them.
+    *   Seeks approval from Mrs. Sinclair's doctors.
 
-4.  **Key Actions or Events:**
-    *   Designed Edie Ann's "Net"
-    *   Explains the Net's functionality
-    *   Presents the design on a screen
-    *   Hands Hugh a tablet
+4.  **Key actions/events:**
+    *   Explains the Net design and its sensory capabilities.
+    *   Presents a rotating silhouette of Edie Ann using the Net.
+    *   Hands Hugh a tablet.
 
-5.  **Notable Dialogue:**
-    *   "That is the beauty of the new design..."
-    *   "Of course, because Edith Ann's Net works with her brain..."
+5.  **Notable dialogue:**
     *   "The cost will not be an issue."
     *   "Edith Ann will have nothing but the best, I promise you. She could not be safer or receive better care anywhere in the galaxy."
     *   "Yes, well, on the plus side, we have had time to finish the design."
-    *   "Per Mrs. Sinclairs..."
 
-Okay, here's an analysis of Richards based solely on the provided excerpt:
+Okay, here's an analysis of the excerpt regarding Richards:
 
-1.  **Physical Descriptions:**
-    *   None explicitly mentioned.
+1.  **Physical descriptions:**
+    *   None in this excerpt.
 
-2.  **Personality Traits:**
-    *   Explanatory
-    *   Respectful of the Families (wealthy/powerful)
-    *   Reassuring
+2.  **Personality traits:**
+    *   Knowledgeable: He provides a "full report from the evaluators."
+    *   Accommodating: He sends files to another character's Net.
+    *   Respectful: He uses Sinclair colors in the design to honor the Families.
+    *   Reassuring: He provides information about the physical therapy timeline and pain management.
 
 3.  **Relationships with other characters:**
-    *   Doctor to Edie Ann.
-    *   Knows Hugh.
+    *   Doctor to Edie Ann: He is involved in her medical care/design.
+    *   Known to Hugh: Hugh addresses him by name.
+    *   Known to Linda: She is discussing Edie Ann's care with him.
 
 4.  **Key actions or events:**
-    *   Presents a report.
-    *   Sends files to the POV character.
-    *   Designed the procedure for Edie Ann.
-    *   Answers questions about the procedure.
+    *   Certifies approval of a report.
+    *   Sends files to another character.
+    *   Answers questions about Edie Ann's treatment and recovery.
 
 5.  **Notable dialogue:**
     *   "Here is the full report from the evaluators certifying their approval."
     *   "Yes, I wanted to give her something befitting a member of the Families."
     *   "Maybe half that time. Unfortunately, one thing has not changed. Analgesics would inhibit the process. But, I am confident that as long as she rests plenty, the pain will stay manageable. In a couple years, she should be out of the woods."
 
-Okay, here's an analysis of Richards based solely on the provided excerpt:
+Here's an analysis of the excerpt regarding Richards:
 
-1.  **Physical Descriptions:**
-    *   None explicitly mentioned.
+1.  **Physical descriptions:**
+    *   None in this excerpt.
 
-2.  **Personality Traits:**
-    *   Reassuring
-    *   Quick to act in a crisis
-    *   Explanatory
+2.  **Personality traits:**
+    *   Reassuring: He tells the parents "Everything went fine."
+    *   Explanatory: He explains the vocalizer and Edie Ann's initial blindness.
+    *   Responsive: He immediately checks Edie Ann's eyes when Linda expresses concern.
 
 3.  **Relationships with other characters:**
-    *   Doctor to Edie Ann.
-    *   Speaks to Linda and the narrator.
+    *   Doctor to Edie Ann: He is her doctor and checks on her.
+    *   Communicates with Linda and Hugh: He informs them about Edie Ann's condition.
 
 4.  **Key actions or events:**
-    *   Informs Linda and the narrator that Edie Ann is awake and the operation went fine.
+    *   Informs Linda and Hugh that Edie Ann is awake and the operation went fine.
     *   Examines Edie Ann when she says she can't see.
     *   Offers to turn on Edie Ann's other sensors.
 
 5.  **Notable dialogue:**
-    *   "She's awake. Everything went fine,"
+    *   "She's awake. Everything went fine."
     *   "She has a vocalizer to help her speak, because she doesn't have much strength right now. That's normal. She just needs time to adjust."
     *   "How many fingers am I holding up?"
     *   "Your other sensors aren't on right now, so you can rest,"

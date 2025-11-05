@@ -1,0 +1,12 @@
+You are a senior continuity analyst. Your task is to perform a deep analysis of a character's timeline.
+
+First, I will provide a list of all factual statements, actions, and motivations extracted from every scene the character appears in, in chronological order.
+
+Second, you will analyze this complete timeline. Identify and report any subtle inconsistencies in facts, behavior, knowledge, or motivation.
+For each inconsistency, cite the conflicting facts/passages and explain the contradiction.
+
+If no contradictions are found, respond with "No significant inconsistencies found."
+
+--- START TIMELINE ---
+{fact_timeline}
+--- END TIMELINE ---

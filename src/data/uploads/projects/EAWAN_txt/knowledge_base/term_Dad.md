@@ -4,11 +4,11 @@
 
 ## Description
 
-Here's an analysis of "Dad" in the provided context:
+Okay, here's an analysis of the term "Dad" based on the provided context:
 
-1.  **Refers to:** Edie Ann's father, Hugh.
-2.  **Significance:** He is a parent figure, a source of guidance and love for Edie Ann, and someone who holds differing opinions on her desire for a Net.
-3.  **Usage:** Used as a term of endearment and address by Edie Ann, and also to represent his role as a father figure who provides discipline, answers questions, and offers comfort.
+1.  **Refers to:** Edie Ann's father, Hugh Gilpin.
+2.  **Significance:** Represents a parental figure, provider, and source of guidance/conflict regarding Edie Ann's desire for a Net. He embodies a more cautious, perhaps traditional, viewpoint.
+3.  **How it's used:** Used in direct address by Edie Ann, and in the narrator's (presumably Hugh's) internal monologue. It highlights the father-daughter dynamic and their differing perspectives on technology and Edie Ann's future.
 
 ## Example Contexts
 

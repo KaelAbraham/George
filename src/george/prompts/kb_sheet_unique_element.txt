@@ -1,0 +1,31 @@
+# Unique Element Sheet: [Element Name]
+
+## 1. Core Identity & Summary
+* **Element Name:** (e.g., "'Stasis' Field," "The 'Voidsong' Amulet")
+* **Element Type:** (e.g., Technology, Magic System, Alien Species, Organization)
+* **Logline:** (One-sentence description)
+
+## 2. Description & Mechanics (The "Rules")
+* **Appearance / Properties:** (What does it look/feel/sound like?)
+* **Function:** (What does it do?)
+* **Rules & Limitations:** (This is the most critical section for consistency)
+    * What can't it do?
+    * What are the costs / side effects?
+    * What are the requirements for use?
+
+## 3. Role in the World (The "Lore")
+* **Origin / Creator:** (Where did it come from?)
+* **Availability:** (Common, rare, or a one-of-a-kind "MacGuffin"?)
+* **Who Controls It?**
+* **Public Knowledge:** (Well-known, state secret, or forgotten myth?)
+* **Impact on Society:** (How has this shaped the world?)
+
+## 4. Role in the Story (The "Plot Function")
+* **The MacGuffin:** (Is it the thing everyone is chasing?)
+* **The "Gun":** (Is it a tool used to solve problems?)
+* **The "Rule-Changer":** (Does its introduction change the story?)
+* **Thematic Link:** (What theme does it represent?)
+* **Key Plot Moments:** (List scenes where this element is critical)
+
+## 5. Author's Meta-Notes
+* **Inspiration:** (e.g., "Based on quantum entanglement")

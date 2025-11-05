@@ -1,0 +1,79 @@
+# Character Sheet: [Character's Full Name]
+
+## 1. Core Identity & Summary
+* **Full Name:**
+* **Nicknames / Aliases:**
+* **Role in Story:** (e.g., Protagonist, Antagonist, Mentor, Foil)
+* **Character Logline:** (A one-sentence summary of the character and their primary conflict)
+
+## 2. Story Arc (Per Story/Book)
+* **Goal (External):** (What does the character want to achieve?)
+* **Motivation (Internal):** (Why do they need to achieve this goal?)
+* **The Lie They Believe:** (Core misconception about themselves or the world)
+* **The Truth They Must Learn:** (The theme of their arc)
+* **Internal Conflict:** (The primary "Want vs. Need" struggle)
+* **Character Arc Type:** (Positive, Negative, or Flat?)
+* **Key Arc Turning Points:**
+    * Beginning (Status Quo):
+    * Midpoint Shift:
+    * Climax / Resolution:
+
+## 3. Psychology & Personality
+* **Core Personality Traits:** (List 5-7 key adjectives)
+* **Strengths / Virtues:**
+* **Flaws / Vices:**
+* **Greatest Fear(s):**
+* **Temperament:** (e.g., Hot-headed, calm, anxious)
+* **Worldview / Philosophy:**
+* **Hobbies & Interests:**
+* **Pet Peeves:**
+* **Secrets:**
+
+## 4. Appearance, Voice & Mannerisms
+* **Physical Description:**
+    * Overall Impression:
+    * Build / Height:
+    * Hair / Eye Color:
+    * Distinguishing Features: (Scars, tattoos, cybernetics)
+    * Typical Attire:
+* **Voice & Dialogue:**
+    * Accent / Dialect:
+    * Pitch / Tone:
+    * Pace of Speech:
+    * Common Phrases / "Tells":
+    * Vocabulary:
+* **Physical Mannerisms:**
+    * Posture / Gait:
+    * Habits / Tics:
+    * Dominant Hand:
+
+## 5. Backstory & History
+* **Place of Birth / Homeworld:**
+* **Childhood / Upbringing:**
+* **Family:**
+* **Education / Training:**
+* **Key Life Events:** (The 2-3 defining moments from their past)
+* **Past Failures / Regrets:**
+* **Greatest Accomplishments:**
+
+## 6. Relationships
+* **[Character Name 1]:**
+    * Relationship:
+    * Dynamic:
+* **[Character Name 2]:**
+    * Relationship:
+    * Dynamic:
+
+## 7. Skills, Assets & World-Specific Details
+* **Occupation / Role:**
+* **Specialized Skills:**
+* **Weaknesses / Incompetencies:**
+* **Key Possessions:**
+* **Financial Status:**
+* **Home / Living Situation:**
+
+## 8. Author's Meta-Notes
+* **Inspiration:**
+* **Key Themes Embodied:**
+* **Continuity Tracker:** (A running list of key changes)
+* **Future Arc Ideas:**

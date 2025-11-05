@@ -114,10 +114,12 @@ class ProjectManager:
                         with open(metadata_path, 'r') as f:
                             metadata = json.load(f)
                         projects.append({
+                            "id": item,  # Use folder name as ID
                             "name": metadata.get("project_name", item),
                             "author": metadata.get("author", ""),
                             "description": metadata.get("description", ""),
                             "created_at": metadata.get("created_at", ""),
+                            "processing_status": metadata.get("processing_status", "created"),
                             "path": item_path
                         })
                 except Exception as e:

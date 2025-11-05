@@ -1,0 +1,35 @@
+# Location Sheet: [Location Name]
+
+## 1. Core Identity & Summary
+* **Location Name:**
+* **Location Type:** (e.g., Planet, City, Building, Starship)
+* **Role in Story:** (e.g., Primary Setting, Home Base, Climax Location)
+* **Location Logline:** (A one-sentence summary)
+
+## 2. Sensory Details (The "On-Page" Experience)
+* **Sight (Visuals):** (Colors, light, architecture, condition)
+* **Sound (Aural):** (e.g., "Hum of machinery," "Crowds")
+* **Smell (Olfactory):** (e.g., "Ozone and recycled air," "Spices")
+* **Feel (Tactile):** (Temperature, humidity, textures)
+* **Atmosphere / "Vibe":** (e.g., "Tense," "Lively," "Sacred")
+
+## 3. Function in the World (The "Lore")
+* **Purpose:** (What is this place for?)
+* **Inhabitants:** (Who lives/works here?)
+* **Culture:** (Local customs, laws, "unwritten rules")
+* **Economy / Resources:**
+* **Key Sub-Locations:** (Important rooms, landmarks)
+
+## 4. Function in the Story (The "Plot")
+* **Plot Significance:** (What key events happen here?)
+* **Thematic Resonance:** (What theme does this location represent?)
+* **Impact on Characters:** (e.g., "Safe house," "Labyrinth," "Test")
+* **Strategic Value:**
+
+## 5. History & Backstory
+* **Origin:** (Who built/discovered it? When? Why?)
+* **Key Historical Events:** (What happened here before the story?)
+* **Current Status:** (In good repair, decaying, contested?)
+
+## 6. Author's Meta-Notes
+* **Inspiration:** (e.g., "Based on photos of Svalbard")

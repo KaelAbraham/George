@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Review Entities</title>
+    <style>
+        body { font-family: sans-serif; line-height: 1.6; margin: 2em; background-color: #f4f4f4; color: #333; }
+        .container { max-width: 900px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .candidate-card { border: 1px solid #ddd; border-radius: 5px; padding: 15px; margin-bottom: 15px; background-color: #fafafa; transition: background-color 0.3s, border-color 0.3s; }
+        .candidate-card.approved { background-color: #eaf6ec; border-color: #28a745; }
+        .candidate-card.rejected { opacity: 0.5; background-color: #fcebeb; }
+        .candidate-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .candidate-name { font-size: 1.2em; font-weight: bold; color: #0056b3; }
+        .actions button { padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin-right: 5px; }
+        .btn-approve { background-color: #28a745; color: white; }
+        .btn-reject { background-color: #dc3545; color: white; }
+        .finalize-container { text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
+        #finalize-btn { padding: 12px 25px; font-size: 1.1em; background-color: #007bff; color: white; border-radius: 5px; border: none; cursor: pointer; }
+        #finalize-btn:disabled { background-color: #ccc; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Review Entity Candidates</h1>
+    <p>Approve the entities to add them to your project's knowledge base. Rejected entities will be ignored.</p>
+    <hr>
+    <div id="candidates-list">
+        <p>Loading candidates...</p>
+    </div>
+    <div class="finalize-container">
+        <button id="finalize-btn" disabled>Build Knowledge Base</button>
+        <p id="status-message" style="margin-top: 10px; color: #007bff;"></p>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const projectId = '{{ project_id }}';
+        const candidatesList = document.getElementById('candidates-list');
+        const finalizeBtn = document.getElementById('finalize-btn');
+        const statusMessage = document.getElementById('status-message');
+        let allCandidates = [];
+
+        fetch(`/api/projects/${projectId}/candidates`)
+            .then(response => response.json())
+            .then(candidates => {
+                allCandidates = candidates;
+                candidatesList.innerHTML = '';
+                if (candidates.length === 0) { /* ... */ return; }
+
+                candidates.forEach((candidate, index) => {
+                    const card = document.createElement('div');
+                    card.className = 'candidate-card';
+                    card.dataset.index = index; // Keep track of the original candidate
+
+                    const confidence = (candidate.confidence * 100).toFixed(1);
+
+                    card.innerHTML = `
+                        <div class="actions">
+                            <button class="btn-approve">Approve</button>
+                            <button class="btn-reject">Reject</button>
+                        </div>
+                    `;
+                    candidatesList.appendChild(card);
+                });
+                
+                finalizeBtn.disabled = false;
+            })
+            .catch(error => { /* ... */ });
+
+        // Event delegation for approve/reject buttons
+        candidatesList.addEventListener('click', function(event) {
+            const card = event.target.closest('.candidate-card');
+            if (!card) return;
+
+            if (event.target.classList.contains('btn-approve')) {
+                card.classList.remove('rejected');
+                card.classList.add('approved');
+                card.dataset.status = 'approved';
+            } else if (event.target.classList.contains('btn-reject')) {
+                card.classList.remove('approved');
+                card.classList.add('rejected');
+                card.dataset.status = 'rejected';
+            }
+        });
+
+        // Finalize button click handler
+        finalizeBtn.addEventListener('click', function() {
+            const approvedCandidates = [];
+            const cards = document.querySelectorAll('.candidate-card[data-status="approved"]');
+            
+            cards.forEach(card => {
+                const index = parseInt(card.dataset.index, 10);
+                approvedCandidates.push(allCandidates[index]);
+            });
+
+            if (approvedCandidates.length === 0) {
+                alert('Please approve at least one entity before building the knowledge base.');
+                return;
+            }
+
+            statusMessage.textContent = 'Building knowledge base... This may take a moment.';
+            finalizeBtn.disabled = true;
+
+            fetch(`/api/projects/${projectId}/finalize_entities`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ entities: approvedCandidates })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    statusMessage.textContent = data.message;
+                    alert('Knowledge base built! You are now ready to chat with George.');
+                    // Redirect to the chat page
+                    window.location.href = '/chat/';
+                } else {
+                    statusMessage.textContent = `Error: ${data.message}`;
+                    finalizeBtn.disabled = false;
+                }
+            })
+            .catch(error => {
+                console.error('Error finalizing entities:', error);
+                statusMessage.textContent = 'An error occurred. Please try again.';
+                finalizeBtn.disabled = false;
+            });
+        });
+    });
+</script>
+
+</body>
+</html>
