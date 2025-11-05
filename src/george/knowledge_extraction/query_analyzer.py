@@ -32,11 +32,14 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# --- Load AI Router System Instructions from file ---
-PROMPT_DIR = george_dir / "prompts"
-AI_ROUTER_PROMPT_FILE = PROMPT_DIR / "ai_router_v3.txt"
-AI_ROUTER_SYSTEM_PROMPT = ""
+# --- Load AI Router System Instructions from file (Updated to use backend/prompts) ---
+# Prompts have been moved to backend/prompts/ for centralized Brain logic
 try:
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    PROMPT_DIR = project_root / "backend" / "prompts"
+    AI_ROUTER_PROMPT_FILE = PROMPT_DIR / "ai_router_v3.txt"
+    AI_ROUTER_SYSTEM_PROMPT = ""
+    
     if not PROMPT_DIR.exists():
         logger.warning(f"Prompts directory not found at {PROMPT_DIR}. Creating it.")
         PROMPT_DIR.mkdir(parents=True, exist_ok=True)
@@ -55,7 +58,7 @@ try:
         logger.info(f"Successfully loaded AI Router prompt from {AI_ROUTER_PROMPT_FILE}")
 
 except Exception as e:
-    logger.error(f"FATAL: Error loading AI Router prompt file '{AI_ROUTER_PROMPT_FILE}': {e}")
+    logger.error(f"FATAL: Error loading AI Router prompt file: {e}")
     AI_ROUTER_SYSTEM_PROMPT = "ERROR: Could not load router prompt."
 
 

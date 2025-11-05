@@ -53,15 +53,16 @@ except Exception as init_e:
     pm = None 
     db = None # Set db to None on failure
 
-# --- Load Georgeification Prompt (No changes) ---
+# --- Load Georgeification Prompt (Updated to use backend/prompts) ---
 GEORGEIFY_PROMPT = ""
 try:
-    current_dir = Path(__file__).parent.parent.parent # src/george/ui -> src/george
-    prompt_path = current_dir.parent / "prompts" / "george_operational_protocol.txt"
+    # Update path to load from backend/prompts instead of src/george/prompts
+    project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+    prompt_path = project_root / "backend" / "prompts" / "george_operational_protocol.txt"
     with open(prompt_path, 'r', encoding='utf-8') as f:
         GEORGEIFY_PROMPT = f.read()
     if not GEORGEIFY_PROMPT: raise ValueError("Prompt file is empty.")
-    logger.info("Successfully loaded Georgeification prompt.")
+    logger.info("Successfully loaded Georgeification prompt from backend/prompts.")
 except Exception as e:
     logger.error(f"FATAL: Error loading Georgeification prompt file: {e}", exc_info=True)
     GEORGEIFY_PROMPT = "ERROR: Could not load Georgeification prompt."

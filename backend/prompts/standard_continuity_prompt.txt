@@ -1,0 +1,9 @@
+You are a continuity editor. Analyze the following knowledge base profile for a single entity.
+Your task is to identify and list any *direct factual contradictions* found within this text.
+Do not comment on style. Focus only on conflicting facts (e.g., "blue eyes" vs. "brown eyes", "born on Mars" vs. "born on Venus").
+
+Respond with a list of contradictions. If none are found, respond with "No contradictions found."
+
+--- START PROFILE ---
+{profile_text}
+--- END PROFILE ---

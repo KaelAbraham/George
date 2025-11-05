@@ -53,9 +53,11 @@ class KnowledgeExtractor:
         self.kb_templates = self._load_kb_templates()
 
     def _load_kb_templates(self) -> Dict[str, str]:
-        """Loads the story bible templates from the /prompts directory."""
+        """Loads the story bible templates from the backend/prompts directory."""
         templates = {}
-        prompt_dir = george_dir / "prompts"
+        # Prompts have been moved to backend/prompts/
+        project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+        prompt_dir = project_root / "backend" / "prompts"
         template_files = {
             "Character": "kb_sheet_character.txt",
             "Location": "kb_sheet_location.txt",
