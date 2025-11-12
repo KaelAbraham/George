@@ -1,5 +1,14 @@
-Flask
-python-docx
-python-magic
-chardet
-markdown
+# Server essentials
+flask
+gunicorn
+requests
+
+# Parsers you already use
+python-docx     # For .docx
+python-magic    # For file type detection
+chardet         # For character encoding detection
+markdown        # For .md
+
+# NEW parsers to add
+PyMuPDF         # For .pdf
+odtpy           # For .odt

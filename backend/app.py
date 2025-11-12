@@ -23,9 +23,13 @@ sys.path.insert(0, str(backend_path))
 from george.llm_integration import GeorgeAI
 # Import from local knowledge_extraction (now in backend/)
 from knowledge_extraction.orchestrator import KnowledgeExtractor
+from job_manager import JobManager
 
 # Load environment variables from project root
 load_dotenv(dotenv_path=project_root / '.env')
+
+# Initialize global JobManager instance
+job_manager = JobManager(db_path="data/jobs.db")
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -246,40 +250,105 @@ def query():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/jobs/<job_id>', methods=['GET'])
+def get_job_status(job_id):
+    """Get the status of a specific job."""
+    # (Add security here: check if user owns this job_id)
+    job = job_manager.get_job_status(job_id)
+    if job is None:
+        return jsonify({'error': 'Job not found'}), 404
+    return jsonify(job)
+
+
+@app.route('/project/<project_id>/jobs', methods=['GET'])
+def get_all_project_jobs(project_id):
+    """Get all jobs for a specific project."""
+    # (Add security here)
+    jobs = job_manager.get_jobs_for_project(project_id)
+    return jsonify(jobs)
+
+
+def _run_wiki_generation_task(job_id, project_id, user_id):
+    """
+    Background task for wiki generation.
+    This function runs asynchronously and performs heavy lifting.
+    It updates the job status as it progresses.
+    """
+    try:
+        # Update status: Starting
+        job_manager.update_job_status(job_id, status='running', progress=10, message='Initializing wiki generation...')
         
-        # Simple keyword matching to find relevant profiles
-        question_lower = question.lower()
+        # TODO: Here you would call your wiki generation logic
+        # For now, we'll simulate the work
+        # Example: result = knowledge_extractor.generate_wiki(project_id)
         
-        for profile_file in KNOWLEDGE_BASE_FOLDER.glob('*.md'):
-            # Check if entity name appears in question
-            entity_name = profile_file.stem.split('_', 1)[1].replace('_', ' ')
-            
-            if entity_name.lower() in question_lower:
-                with open(profile_file, 'r', encoding='utf-8') as f:
-                    context_parts.append(f.read())
+        job_manager.update_job_status(job_id, status='running', progress=50, message='Generating wiki content...')
         
-        # If no specific entities mentioned, load all character profiles
-        if not context_parts:
-            for profile_file in KNOWLEDGE_BASE_FOLDER.glob('character_*.md'):
-                with open(profile_file, 'r', encoding='utf-8') as f:
-                    context_parts.append(f.read())
+        # Simulate heavy work (in production, this would be actual wiki generation)
+        # result = run_wiki_generation(project_id)
         
-        # Combine context
-        context = '\n\n---\n\n'.join(context_parts)
+        job_manager.update_job_status(job_id, status='running', progress=90, message='Finalizing wiki...')
         
-        if not context:
-            return jsonify({
-                'answer': 'No knowledge base available. Please upload a document first.'
-            })
+        # Placeholder result
+        result = {
+            "files_created": 20,
+            "graph_nodes": 150,
+            "wiki_url": f"/project/{project_id}/wiki"
+        }
         
-        # Get answer from Gemini
-        answer = gemini.answer_query(question, context)
+        # Update status: Complete
+        job_manager.update_job_status(
+            job_id, 
+            status='completed', 
+            progress=100, 
+            message='Wiki generation complete!',
+            result=result
+        )
         
+    except Exception as e:
+        job_manager.update_job_status(
+            job_id, 
+            status='failed', 
+            progress=0, 
+            message=f'Error: {str(e)}'
+        )
+
+
+@app.route('/project/<project_id>/generate_wiki', methods=['POST'])
+def generate_wiki(project_id):
+    """
+    Start asynchronous wiki generation for a project.
+    Returns immediately with a job ID for tracking progress.
+    """
+    try:
+        # TODO: Get user_id from authentication token
+        # user_id = get_user_from_token(request)
+        user_id = "anonymous"  # Placeholder
+        
+        # 1. Create the job "receipt"
+        job_id = job_manager.create_job(
+            project_id=project_id,
+            user_id=user_id,
+            job_type="wiki_generation"
+        )
+        
+        # 2. Start the background task
+        job_manager.run_async(
+            job_id,
+            _run_wiki_generation_task,
+            job_id,
+            project_id,
+            user_id
+        )
+        
+        # 3. Return immediately with 202 Accepted
         return jsonify({
-            'question': question,
-            'answer': answer,
-            'sources_used': len(context_parts)
-        })
+            "message": "Wiki generation has started.",
+            "job_id": job_id,
+            "status_url": f"/jobs/{job_id}"
+        }), 202
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500

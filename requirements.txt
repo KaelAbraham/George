@@ -20,7 +20,6 @@ ollama>=0.1.0
 # Data Processing and Utilities
 numpy>=1.24.0
 pandas>=2.1.0
-sqlite3>=2.6.0
 # Serialization
 pyyaml>=6.0
 # Testing

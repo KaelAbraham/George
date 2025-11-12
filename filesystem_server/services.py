@@ -29,6 +29,23 @@ except ImportError:
     MARKDOWN_AVAILABLE = False
     markdown = None
 
+# --- NEW: Add PDF support ---
+try:
+    import fitz  # PyMuPDF
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
+    fitz = None
+
+# --- NEW: Add ODT support ---
+try:
+    from odt import ODTParser
+    ODT_AVAILABLE = True
+except ImportError:
+    ODT_AVAILABLE = False
+    ODTParser = None
+
+
 logger = logging.getLogger(__name__)
 
 class DocumentParserError(Exception):
@@ -36,26 +53,50 @@ class DocumentParserError(Exception):
     pass
 
 class DocumentParser:
-    """A robust multi-format document parser for .docx, .md, and .txt files."""
+    """A robust multi-format document parser."""
     def __init__(self):
         self.supported_formats = {
             '.txt': 'Plain Text',
             '.md': 'Markdown',
-            '.docx': 'Microsoft Word Document'
+            '.docx': 'Microsoft Word Document',
+            '.pdf': 'Portable Document Format',  # <-- NEW
+            '.odt': 'OpenDocument Text'          # <-- NEW
         }
+        logger.info("DocumentParser initialized.")
+        if not DOCX_AVAILABLE:
+            logger.warning(".docx parsing disabled. 'python-docx' not found.")
+        if not MARKDOWN_AVAILABLE:
+            logger.warning(".md parsing disabled. 'markdown' not found.")
+        if not PDF_AVAILABLE:
+            logger.warning(".pdf parsing disabled. 'PyMuPDF' not found.")
+        if not ODT_AVAILABLE:
+            logger.warning(".odt parsing disabled. 'odtpy' not found.")
+
 
     def detect_file_type(self, file_path: str) -> str:
         if not os.path.exists(file_path):
             raise DocumentParserError(f"File not found: {file_path}")
+        
+        # Use libmagic first if available, it's more reliable
         if MAGIC_AVAILABLE:
             try:
                 mime = magic.from_file(file_path, mime=True)
                 if mime == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
                     return '.docx'
-                elif mime == 'text/plain':
+                elif mime == 'application/pdf':
+                    return '.pdf'
+                elif mime == 'application/vnd.oasis.opendocument.text':
+                    return '.odt'
+                elif mime == 'text/plain' or mime == 'text/markdown':
+                    # For text, still prefer extension for .md
+                    _, ext = os.path.splitext(file_path.lower())
+                    if ext == '.md':
+                        return '.md'
                     return '.txt'
             except Exception:
                 pass
+        
+        # Fallback to extension
         _, ext = os.path.splitext(file_path.lower())
         return ext
 
@@ -70,7 +111,7 @@ class DocumentParser:
 
     def parse_docx(self, file_path: str) -> Dict[str, Any]:
         if not DOCX_AVAILABLE:
-            raise DocumentParserError("python-docx library not available.")
+            raise DocumentParserError("'python-docx' library not available. Cannot parse .docx")
         try:
             doc = DocxDocument(file_path)
             paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
@@ -88,17 +129,14 @@ class DocumentParser:
 
     def parse_markdown(self, file_path: str) -> Dict[str, Any]:
         if not MARKDOWN_AVAILABLE:
-            raise DocumentParserError("markdown library not available.")
+            raise DocumentParserError("'markdown' library not available. Cannot parse .md")
         try:
             encoding = self.detect_encoding(file_path)
             with codecs.open(file_path, 'r', encoding=encoding) as f:
                 content = f.read()
-            lines = content.split('\n')
-            text_lines = []
-            for line in lines:
-                clean_line = line.lstrip('# ').replace('*', '').replace('_', '').replace('`', '')
-                if clean_line.strip():
-                    text_lines.append(clean_line)
+            # Simple strip of markdown syntax. Can be improved.
+            text_content = re.sub(r'[#*_`]', '', content)
+            text_lines = [line.strip() for line in text_content.split('\n') if line.strip()]
             return {
                 'content': '\n'.join(text_lines),
                 'metadata': {'line_count': len(lines), 'encoding': encoding},
@@ -120,20 +158,65 @@ class DocumentParser:
         except Exception as e:
             raise DocumentParserError(f"Error parsing .txt file: {str(e)}")
 
+    # --- NEW: PDF Parser ---
+    def parse_pdf(self, file_path: str) -> Dict[str, Any]:
+        if not PDF_AVAILABLE:
+            raise DocumentParserError("'PyMuPDF' library not available. Cannot parse .pdf")
+        try:
+            doc = fitz.open(file_path)
+            text_content = ""
+            for page in doc:
+                text_content += page.get_text() + "\n"
+            
+            metadata = {
+                'title': doc.metadata.get('title'),
+                'author': doc.metadata.get('author'),
+                'page_count': doc.page_count,
+                'format': 'pdf'
+            }
+            doc.close()
+            return {'content': text_content, 'metadata': metadata, 'format': 'pdf'}
+        except Exception as e:
+            raise DocumentParserError(f"Error parsing .pdf file: {str(e)}")
+
+    # --- NEW: ODT Parser ---
+    def parse_odt(self, file_path: str) -> Dict[str, Any]:
+        if not ODT_AVAILABLE:
+            raise DocumentParserError("'odtpy' library not available. Cannot parse .odt")
+        try:
+            parser = ODTParser()
+            content = parser.toString(file_path)
+            return {
+                'content': content,
+                'metadata': {'format': 'odt'},
+                'format': 'odt'
+            }
+        except Exception as e:
+            raise DocumentParserError(f"Error parsing .odt file: {str(e)}")
+
+
     def parse(self, file_path: str) -> Dict[str, Any]:
         file_type = self.detect_file_type(file_path)
+        
         if file_type == '.docx':
             return self.parse_docx(file_path)
         elif file_type == '.md':
             return self.parse_markdown(file_path)
         elif file_type == '.txt':
             return self.parse_txt(file_path)
+        elif file_type == '.pdf':  # <-- NEW
+            return self.parse_pdf(file_path)
+        elif file_type == '.odt':  # <-- NEW
+            return self.parse_odt(file_path)
         else:
             try:
+                # Fallback: attempt to parse as plain text
+                logger.warning(f"Unsupported file type '{file_type}', attempting to parse as .txt")
                 return self.parse_txt(file_path)
-            except DocumentParserError:
-                raise DocumentParserError(f"Unsupported file format: {file_type}")
+            except Exception as e:
+                raise DocumentParserError(f"Unsupported and un-parseable file format: {file_type} ({e})")
 
+# ... (rest of your TextChunk and TextChunker classes remain unchanged) ...
 @dataclass
 class TextChunk:
     """Represents a chunk of text with metadata"""
@@ -170,14 +253,19 @@ class TextChunker:
     def _split_into_paragraphs(self, text: str) -> List[Tuple[str, int, int]]:
         paragraphs = []
         pos = 0
-        for paragraph_text in re.split(r'\n\s*\n', text):
+        # Split by one or more newline characters
+        for paragraph_text in re.split(r'\n+', text): # Updated regex for flexibility
             if not paragraph_text.strip():
-                pos += len(paragraph_text) + 2
+                pos += len(paragraph_text) + 1 # Account for at least one newline
                 continue
-            start_pos = pos + len(paragraph_text) - len(paragraph_text.lstrip())
+            
+            # Find the actual start position of non-whitespace text
+            start_offset = len(paragraph_text) - len(paragraph_text.lstrip())
+            start_pos = pos + start_offset
             end_pos = pos + len(paragraph_text)
+            
             paragraphs.append((paragraph_text.strip(), start_pos, end_pos))
-            pos += len(paragraph_text) + 2
+            pos = end_pos + 1 # Move position to after the current paragraph and its newline
         return paragraphs
 
     def _create_chunks_from_paragraphs(self, paragraphs: List[Tuple[str, int, int]], 
@@ -186,39 +274,67 @@ class TextChunker:
         current_chunk_text = ""
         current_chunk_start = None
         current_chunk_end = None
-        paragraph_start = None
-        paragraph_count = 0
+        paragraph_start_index = 0
+        
         for i, (paragraph_text, para_start, para_end) in enumerate(paragraphs):
+            if not paragraph_text:
+                continue
+
             if not current_chunk_text:
                 current_chunk_start = para_start
-                paragraph_start = i + 1
+                paragraph_start_index = i
             
-            if len(current_chunk_text) + len(paragraph_text) > self.chunk_size and current_chunk_text:
+            # Check if adding the new paragraph (plus a newline separator) exceeds chunk size
+            if len(current_chunk_text) + len(paragraph_text) + 2 > self.chunk_size and current_chunk_text:
+                # Save the current chunk
                 chunks.append(TextChunk(
                     text=current_chunk_text.strip(),
                     source_file=source_file,
                     chapter=chapter,
-                    paragraph_start=paragraph_start,
-                    paragraph_end=i,
+                    paragraph_start=paragraph_start_index,
+                    paragraph_end=i - 1,
                     character_start=current_chunk_start,
                     character_end=current_chunk_end
                 ))
                 
-                overlap_text = current_chunk_text[-self.chunk_overlap:]
-                current_chunk_text = overlap_text
-                current_chunk_start = (current_chunk_end - len(overlap_text)) if current_chunk_end else para_start
-                paragraph_start = i
+                # --- Start new chunk with overlap ---
+                # Find a good overlap point (approx self.chunk_overlap)
+                overlap_point = max(0, len(current_chunk_text) - self.chunk_overlap)
+                # Find the nearest space to not cut words
+                overlap_point = current_chunk_text.rfind(' ', 0, overlap_point) + 1
+                
+                # Get the text for overlap
+                overlap_text = current_chunk_text[overlap_point:]
+                
+                # Find the new paragraph start index for the overlap
+                # This is tricky and an approximation, but better than nothing
+                overlap_para_start_index = paragraph_start_index
+                temp_len = 0
+                for j in range(paragraph_start_index, i):
+                    temp_len += len(paragraphs[j][0]) + 2 # Add 2 for newlines
+                    if temp_len > overlap_point:
+                        overlap_para_start_index = j
+                        break
+                
+                # Set new chunk state
+                current_chunk_text = overlap_text + "\n\n" + paragraph_text
+                current_chunk_start = para_start - len(overlap_text) # Approximate start
+                paragraph_start_index = overlap_para_start_index
 
-            current_chunk_text += ("\n\n" if current_chunk_text else "") + paragraph_text
+            else:
+                # Just add the paragraph to the current chunk
+                current_chunk_text += ("\n\n" if current_chunk_text else "") + paragraph_text
+            
             current_chunk_end = para_end
         
+        # Add the last remaining chunk
         if current_chunk_text:
             chunks.append(TextChunk(
                 text=current_chunk_text.strip(),
                 source_file=source_file,
                 chapter=chapter,
-                paragraph_start=paragraph_start,
-                paragraph_end=len(paragraphs),
+                paragraph_start=paragraph_start_index,
+                paragraph_end=len(paragraphs) - 1,
                 character_start=current_chunk_start,
                 character_end=current_chunk_end
             ))
@@ -238,6 +354,11 @@ class TextChunker:
         """
         # First create basic chunks
         chunks = self.chunk_text(text, source_file, chapter)
+        
+        # Guard against empty chunks list
+        if not chunks:
+            return []
+            
         # Associate entities with chunks based on position
         for chunk in chunks:
             chunk_entities = []
@@ -262,4 +383,7 @@ class TextChunker:
         Returns:
             bool: True if ranges overlap
         """
+        # Handle NoneType inputs
+        if None in [start1, end1, start2, end2]:
+            return False
         return max(start1, start2) <= min(end1, end2)
