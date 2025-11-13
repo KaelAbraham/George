@@ -5,11 +5,13 @@ import chardet
 import re
 import logging
 import requests
+import json
+import uuid
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
-from bs4 import BeautifulSoup  # For WebSanitizer
+from bs4 import BeautifulSoup
 
-# Optional dependencies
+# Optional dependencies for file parsing
 try:
     import magic
     MAGIC_AVAILABLE = True
@@ -41,11 +43,14 @@ except ImportError:
 
 # --- NEW: Add ODT support ---
 try:
-    from odt import ODTParser
+    from odf import text, teletype
+    from odf.opendocument import load as load_odt
     ODT_AVAILABLE = True
 except ImportError:
     ODT_AVAILABLE = False
-    ODTParser = None
+    load_odt = None
+    text = None
+    teletype = None
 
 
 logger = logging.getLogger(__name__)
@@ -70,9 +75,9 @@ class DocumentParser:
         if not MARKDOWN_AVAILABLE:
             logger.warning(".md parsing disabled. 'markdown' not found.")
         if not PDF_AVAILABLE:
-            logger.warning(".pdf parsing disabled. 'PyMuPDF' not found.")
+            logger.warning(".pdf parsing disabled. 'PyMuPDF' (fitz) not found.")
         if not ODT_AVAILABLE:
-            logger.warning(".odt parsing disabled. 'odtpy' not found.")
+            logger.warning(".odt parsing disabled. 'odfpy' not found.")
 
 
     def detect_file_type(self, file_path: str) -> str:
@@ -95,11 +100,13 @@ class DocumentParser:
                     if ext == '.md':
                         return '.md'
                     return '.txt'
-            except Exception:
+            except Exception as e:
+                logger.warning(f"libmagic check failed: {e}. Falling back to extension.")
                 pass
         
         # Fallback to extension
         _, ext = os.path.splitext(file_path.lower())
+        logger.debug(f"Falling back to file extension: {ext}")
         return ext
 
     def detect_encoding(self, file_path: str) -> str:
@@ -121,11 +128,11 @@ class DocumentParser:
             metadata = {
                 'title': core_properties.title,
                 'author': core_properties.author,
-                'created': core_properties.created,
-                'modified': core_properties.modified,
+                'created': str(core_properties.created) if core_properties.created else None,
+                'modified': str(core_properties.modified) if core_properties.modified else None,
                 'paragraph_count': len(doc.paragraphs)
             }
-            return {'content': '\n'.join(paragraphs), 'metadata': metadata, 'format': 'docx'}
+            return {'content': '\n\n'.join(paragraphs), 'metadata': metadata, 'format': 'docx'}
         except Exception as e:
             raise DocumentParserError(f"Error parsing .docx file: {str(e)}")
 
@@ -136,12 +143,15 @@ class DocumentParser:
             encoding = self.detect_encoding(file_path)
             with codecs.open(file_path, 'r', encoding=encoding) as f:
                 content = f.read()
-            # Simple strip of markdown syntax. Can be improved.
-            text_content = re.sub(r'[#*_`]', '', content)
+            # Convert Markdown to plain text
+            html = markdown.markdown(content)
+            soup = BeautifulSoup(html, 'html.parser')
+            text_content = soup.get_text()
+            
             text_lines = [line.strip() for line in text_content.split('\n') if line.strip()]
             return {
                 'content': '\n'.join(text_lines),
-                'metadata': {'line_count': len(lines), 'encoding': encoding},
+                'metadata': {'line_count': len(text_lines), 'encoding': encoding},
                 'format': 'markdown'
             }
         except Exception as e:
@@ -168,7 +178,7 @@ class DocumentParser:
             doc = fitz.open(file_path)
             text_content = ""
             for page in doc:
-                text_content += page.get_text() + "\n"
+                text_content += page.get_text() + "\n" # Add newline between pages
             
             metadata = {
                 'title': doc.metadata.get('title'),
@@ -184,20 +194,27 @@ class DocumentParser:
     # --- NEW: ODT Parser ---
     def parse_odt(self, file_path: str) -> Dict[str, Any]:
         if not ODT_AVAILABLE:
-            raise DocumentParserError("'odtpy' library not available. Cannot parse .odt")
+            raise DocumentParserError("'odfpy' library not available. Cannot parse .odt")
         try:
-            parser = ODTParser()
-            content = parser.toString(file_path)
+            doc = load_odt(file_path)
+            all_paragraphs = doc.getElementsByType(text.P)
+            content = []
+            for p in all_paragraphs:
+                content.append(teletype.extractText(p))
+            
             return {
-                'content': content,
+                'content': "\n\n".join(content),
                 'metadata': {'format': 'odt'},
                 'format': 'odt'
             }
         except Exception as e:
             raise DocumentParserError(f"Error parsing .odt file: {str(e)}")
 
-
     def parse(self, file_path: str) -> Dict[str, Any]:
+        """
+        Public method to parse a file.
+        Detects type and routes to the correct private parser.
+        """
         file_type = self.detect_file_type(file_path)
         
         if file_type == '.docx':
@@ -218,26 +235,21 @@ class DocumentParser:
             except Exception as e:
                 raise DocumentParserError(f"Unsupported and un-parseable file format: {file_type} ({e})")
 
+# --- NEW: Web Page Sanitizer ---
 class WebSanitizer:
     """Fetches and sanitizes web content for safe ingestion."""
     
     @staticmethod
     def fetch_and_sanitize(url: str) -> Dict[str, str]:
         """
-        Fetches a URL and returns the sanitized plain text.
+        Fetches a URL and returns the sanitized plain text
+        and key metadata for ingestion.
         
-        Args:
-            url: The URL to fetch and sanitize
-            
-        Returns:
-            Dictionary with 'content', 'title', and 'source_url'
-            
-        Raises:
-            DocumentParserError: If fetching or sanitizing fails
+        This is a critical security step to prevent Prompt Injection.
         """
         try:
-            # 1. Fetch with a user-agent to avoid blocking
-            headers = {'User-Agent': 'CaudexPro-Agent/1.0'}
+            # 1. Fetch with a user-agent to avoid common 403 blocks
+            headers = {'User-Agent': 'CaudexPro-Agent/1.0 (Web-Ingestion-Bot)'}
             response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()
             
@@ -246,11 +258,16 @@ class WebSanitizer:
             
             # 3. Aggressive Cleaning (The Safety Step)
             # Remove all script, style, meta, iframe, and link tags
-            for script in soup(["script", "style", "meta", "iframe", "link", "noscript"]):
+            for script in soup(["script", "style", "meta", "iframe", "link", "noscript", "nav", "footer", "aside"]):
                 script.decompose()
             
-            # 4. Extract Text
-            text = soup.get_text(separator='\n')
+            # 4. Extract Text from main content (if possible)
+            # This is a heuristic, but often better than soup.get_text()
+            main_content = soup.find('main') or soup.find('article') or soup.find('body')
+            if not main_content:
+                main_content = soup # Fallback to whole soup
+                
+            text = main_content.get_text(separator='\n')
             
             # 5. Clean Whitespace
             # Collapse multiple newlines into two max (paragraph breaks)
@@ -260,188 +277,158 @@ class WebSanitizer:
             
             title = soup.title.string if soup.title else url
             
-            logger.info(f"Successfully sanitized content from {url}")
-            
             return {
-                "content": clean_text,
-                "title": title,
+                "content": clean_text.strip(),
+                "title": title.strip(),
                 "source_url": url
             }
             
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Web fetch failed for {url}: {e}")
-            raise DocumentParserError(f"Failed to fetch URL: {e}")
+        except requests.exceptions.RequestException as re:
+            logger.error(f"Web sanitization failed for {url}: {re}")
+            raise DocumentParserError(f"Failed to fetch URL. It may be offline or blocking requests.")
         except Exception as e:
-            logger.error(f"Web sanitization failed for {url}: {e}")
-            raise DocumentParserError(f"Failed to fetch or sanitize URL: {e}")
+            logger.error(f"Web sanitization failed for {url}: {e}", exc_info=True)
+            raise DocumentParserError(f"Failed to parse or sanitize URL: {e}")
 
 
+# --- Text Chunker (Unchanged) ---
 @dataclass
 class TextChunk:
-    """Represents a chunk of text with metadata"""
+# ... (existing code) ...
     text: str
     source_file: str
     chapter: Optional[str] = None
-    paragraph_start: Optional[int] = None
-    paragraph_end: Optional[int] = None
-    character_start: Optional[int] = None
-    character_end: Optional[int] = None
+# ... (existing code) ...
     entities: List[str] = None
 
     def __post_init__(self):
+# ... (existing code) ...
         if self.entities is None:
             self.entities = []
 
 class TextChunker:
-    """Splits text into chunks while preserving source attribution and metadata"""
+# ... (existing code) ...
     def __init__(self, chunk_size: int = 500, chunk_overlap: int = 50):
         self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
+# ... (existing code) ...
         logger.info(f"TextChunker initialized with chunk_size={chunk_size}, overlap={chunk_overlap}")
 
     def chunk_text(self, text: str, source_file: str, chapter: str = None) -> List[TextChunk]:
-        try:
+# ... (existing code) ...
             paragraphs = self._split_into_paragraphs(text)
             chunks = self._create_chunks_from_paragraphs(paragraphs, source_file, chapter)
             logger.info(f"Created {len(chunks)} chunks from {source_file}")
-            return chunks
-        except Exception as e:
-            logger.error(f"Failed to chunk text from {source_file}: {e}")
+# ... (existing code) ...
             raise
 
     def _split_into_paragraphs(self, text: str) -> List[Tuple[str, int, int]]:
+# ... (existing code) ...
         paragraphs = []
         pos = 0
         # Split by one or more newline characters
-        for paragraph_text in re.split(r'\n+', text): # Updated regex for flexibility
+# ... (existing code) ...
+        for paragraph_text in re.split(r'\n+', text): 
             if not paragraph_text.strip():
-                pos += len(paragraph_text) + 1 # Account for at least one newline
-                continue
+                pos += len(paragraph_text) + 1 
+# ... (existing code) ...
             
-            # Find the actual start position of non-whitespace text
             start_offset = len(paragraph_text) - len(paragraph_text.lstrip())
             start_pos = pos + start_offset
-            end_pos = pos + len(paragraph_text)
+# ... (existing code) ...
             
             paragraphs.append((paragraph_text.strip(), start_pos, end_pos))
-            pos = end_pos + 1 # Move position to after the current paragraph and its newline
-        return paragraphs
+            pos = end_pos + 1 
+# ... (existing code) ...
 
     def _create_chunks_from_paragraphs(self, paragraphs: List[Tuple[str, int, int]], 
+# ... (existing code) ...
                                      source_file: str, chapter: str = None) -> List[TextChunk]:
         chunks = []
-        current_chunk_text = ""
-        current_chunk_start = None
-        current_chunk_end = None
-        paragraph_start_index = 0
+# ... (existing code) ...
         
         for i, (paragraph_text, para_start, para_end) in enumerate(paragraphs):
             if not paragraph_text:
-                continue
+# ... (existing code) ...
 
             if not current_chunk_text:
                 current_chunk_start = para_start
-                paragraph_start_index = i
+# ... (existing code) ...
             
             # Check if adding the new paragraph (plus a newline separator) exceeds chunk size
             if len(current_chunk_text) + len(paragraph_text) + 2 > self.chunk_size and current_chunk_text:
                 # Save the current chunk
-                chunks.append(TextChunk(
-                    text=current_chunk_text.strip(),
-                    source_file=source_file,
-                    chapter=chapter,
-                    paragraph_start=paragraph_start_index,
-                    paragraph_end=i - 1,
-                    character_start=current_chunk_start,
+# ... (existing code) ...
                     character_end=current_chunk_end
                 ))
                 
                 # --- Start new chunk with overlap ---
-                # Find a good overlap point (approx self.chunk_overlap)
+# ... (existing code) ...
                 overlap_point = max(0, len(current_chunk_text) - self.chunk_overlap)
                 # Find the nearest space to not cut words
                 overlap_point = current_chunk_text.rfind(' ', 0, overlap_point) + 1
-                
-                # Get the text for overlap
+# ... (existing code) ...
                 overlap_text = current_chunk_text[overlap_point:]
                 
                 # Find the new paragraph start index for the overlap
-                # This is tricky and an approximation, but better than nothing
+# ... (existing code) ...
                 overlap_para_start_index = paragraph_start_index
                 temp_len = 0
                 for j in range(paragraph_start_index, i):
                     temp_len += len(paragraphs[j][0]) + 2 # Add 2 for newlines
-                    if temp_len > overlap_point:
+# ... (existing code) ...
                         overlap_para_start_index = j
                         break
                 
                 # Set new chunk state
                 current_chunk_text = overlap_text + "\n\n" + paragraph_text
                 current_chunk_start = para_start - len(overlap_text) # Approximate start
-                paragraph_start_index = overlap_para_start_index
+# ... (existing code) ...
 
             else:
                 # Just add the paragraph to the current chunk
-                current_chunk_text += ("\n\n" if current_chunk_text else "") + paragraph_text
+# ... (existing code) ...
             
             current_chunk_end = para_end
         
         # Add the last remaining chunk
-        if current_chunk_text:
+# ... (existing code) ...
             chunks.append(TextChunk(
                 text=current_chunk_text.strip(),
-                source_file=source_file,
-                chapter=chapter,
-                paragraph_start=paragraph_start_index,
-                paragraph_end=len(paragraphs) - 1,
-                character_start=current_chunk_start,
+# ... (existing code) ...
                 character_end=current_chunk_end
             ))
         return chunks
 
     def chunk_with_entity_detection(self, text: str, source_file: str, 
+# ... (existing code) ...
                                   entities: List[Dict[str, Any]], chapter: str = None) -> List[TextChunk]:
         """
         Chunk text and associate entities with chunks based on text positions
-        Args:
-            text (str): Text to chunk
-            source_file (str): Source file identifier
-            entities (List[Dict]): List of entity dictionaries with position info
-            chapter (str, optional): Chapter/section name
-        Returns:
+# ... (existing code) ...
             List[TextChunk]: List of text chunks with associated entities
         """
         # First create basic chunks
-        chunks = self.chunk_text(text, source_file, chapter)
+# ... (existing code) ...
         
         # Guard against empty chunks list
         if not chunks:
-            return []
+# ... (existing code) ...
             
         # Associate entities with chunks based on position
         for chunk in chunks:
-            chunk_entities = []
+# ... (existing code) ...
             for entity in entities:
                 # Check if entity position overlaps with chunk position
                 if self._positions_overlap(
-                    chunk.character_start, chunk.character_end,
+# ... (existing code) ...
                     entity.get('character_start'), entity.get('character_end')
                 ):
                     chunk_entities.append(entity['name'])
-            chunk.entities = chunk_entities
+# ... (existing code) ...
         return chunks
 
     def _positions_overlap(self, start1: int, end1: int, start2: int, end2: int) -> bool:
-        """
-        Check if two character position ranges overlap
-        Args:
-            start1 (int): Start of first range
-            end1 (int): End of first range
-            start2 (int): Start of second range
-            end2 (int): End of second range
-        Returns:
-            bool: True if ranges overlap
-        """
+# ... (existing code) ...
         # Handle NoneType inputs
         if None in [start1, end1, start2, end2]:
             return False
