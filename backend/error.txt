@@ -1,0 +1,25 @@
+Could not import GeorgeAI from llm_integration
+Could not import EntityExtractor from akg.core
+CRITICAL:root:WARNING: Could not import llm_integration from backend.
+WARNING:root:Could not import read_manuscript_file from parsers module. Using file read fallback.
+ERROR:knowledge_extraction.profile_editor:Could not import GeorgeAI from llm_integration
+WARNING:root:KnowledgeExtractor skipped - requires GeorgeAI (not available)
+ERROR:root:CRITICAL: Prompt file 'ai_router_v4.txt' not found.
+ERROR:root:CRITICAL: Prompt file 'coreference_resolution.txt' not found.
+ERROR:root:CRITICAL: Prompt file 'george_polish.txt' not found.
+INFO:werkzeug:[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+INFO:werkzeug:[33mPress CTRL+C to quit[0m
+INFO:werkzeug: * Restarting with stat
+Could not import GeorgeAI from llm_integration
+Could not import EntityExtractor from akg.core
+CRITICAL:root:WARNING: Could not import llm_integration from backend.
+WARNING:root:Could not import read_manuscript_file from parsers module. Using file read fallback.
+ERROR:knowledge_extraction.profile_editor:Could not import GeorgeAI from llm_integration
+WARNING:root:KnowledgeExtractor skipped - requires GeorgeAI (not available)
+ERROR:root:CRITICAL: Prompt file 'ai_router_v4.txt' not found.
+ERROR:root:CRITICAL: Prompt file 'coreference_resolution.txt' not found.
+ERROR:root:CRITICAL: Prompt file 'george_polish.txt' not found.
+WARNING:werkzeug: * Debugger is active!
+INFO:werkzeug: * Debugger PIN: 114-271-244
+INFO:werkzeug: * Detected change in 'C:\\Users\\kael_\\George\\backend\\app.py', reloading

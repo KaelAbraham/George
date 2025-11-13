@@ -19,7 +19,11 @@ from llm_client import GeminiClient, MultiModelCostAggregator
 from session_manager import SessionManager
 from job_manager import JobManager
 # This is your premium report/wiki generator
-from knowledge_extraction.orchestrator import KnowledgeExtractionOrchestrator
+try:
+    from knowledge_extraction.orchestrator import KnowledgeExtractor as KnowledgeExtractionOrchestrator
+except ImportError as e:
+    logging.warning(f"Could not import KnowledgeExtractor: {e}")
+    KnowledgeExtractionOrchestrator = None
 
 
 # --- Load Config ---
@@ -61,11 +65,6 @@ blp_admin = Blueprint(
     description="Admin-only monitoring and statistics endpoints"
 )
 
-# Register blueprints with the API
-api.register_blueprint(blp_chat)
-api.register_blueprint(blp_jobs)
-api.register_blueprint(blp_admin)
-
 # Make sure data directory exists for job/session dbs
 os.makedirs("data", exist_ok=True) 
 logging.basicConfig(level=logging.INFO)
@@ -105,7 +104,19 @@ try:
     session_manager = SessionManager()
     job_manager = JobManager()
     
-    orchestrator = KnowledgeExtractionOrchestrator()  # Ready for premium jobs
+    # Initialize orchestrator only if import succeeded AND all dependencies available
+    if KnowledgeExtractionOrchestrator:
+        try:
+            # KnowledgeExtractor requires george_ai and project_path
+            # Skip for now since GeorgeAI is not available
+            orchestrator = None
+            logging.warning("KnowledgeExtractor skipped - requires GeorgeAI (not available)")
+        except Exception as e:
+            orchestrator = None
+            logging.warning(f"Could not initialize orchestrator: {e}")
+    else:
+        orchestrator = None
+        logging.warning("KnowledgeExtractionOrchestrator not available - wiki generation disabled")
     
     logging.info("AI Router initialized successfully.")
 except Exception as e:
@@ -186,45 +197,45 @@ failed_tx_logger = FailedTransactionLogger()  # For billing reconciliation on se
 
 # Load all critical prompts on startup
 GEORGE_CONSTITUTION = load_prompt('george_operational_protocol.txt')
-AI_ROUTER_PROMPT_v4 = load_prompt('ai_router_v4.txt') 
-COREF_RESOLUTION_PROMPT = load_prompt('coreference_resolution.txt')
-POLISH_PROMPT = load_prompt('george_polish.txt')
+AI_ROUTER_PROMPT_v4 = load_prompt('ai_router_v3.txt')  # Use v3 as fallback
+COREF_RESOLUTION_PROMPT = load_prompt('query_rewriter.txt')  # Use query_rewriter as coreference resolution
+POLISH_PROMPT = load_prompt('georgeification_polish.txt')  # Correct filename
 
 # --- Marshmallow Schemas for Request/Response Validation ---
 import marshmallow as ma
 
 class ChatRequestSchema(ma.Schema):
     """Request schema for POST /chat endpoint."""
-    query = ma.fields.Str(required=True, description="The user's query text.")
-    project_id = ma.fields.Str(required=True, description="The unique project ID.")
+    query = ma.fields.Str(required=True)
+    project_id = ma.fields.Str(required=True)
 
 class ChatResponseSchema(ma.Schema):
     """Response schema for successful chat responses."""
-    response = ma.fields.Str(description="The AI's final, polished answer.")
-    intent = ma.fields.Str(description="The intent classification from the AI router.")
-    cost = ma.fields.Float(description="The cost deducted for this specific call.")
-    downgraded = ma.fields.Bool(description="True if Pro model was downgraded to Flash due to low balance.")
-    balance = ma.fields.Float(allow_none=True, description="The user's new balance after the transaction (null if billing server fails).")
+    response = ma.fields.Str()
+    intent = ma.fields.Str()
+    cost = ma.fields.Float()
+    downgraded = ma.fields.Bool()
+    balance = ma.fields.Float(allow_none=True)
 
 class JobStatusSchema(ma.Schema):
     """Schema for job status response."""
-    job_id = ma.fields.Str(description="The unique job ID.")
-    project_id = ma.fields.Str(description="The project ID associated with the job.")
-    user_id = ma.fields.Str(description="The user who created the job.")
-    status = ma.fields.Str(description="Current job status (PENDING, IN_PROGRESS, COMPLETED, FAILED).")
-    job_type = ma.fields.Str(description="The type of job.")
-    created_at = ma.fields.DateTime(description="When the job was created.")
-    result = ma.fields.Raw(allow_none=True, description="Job result when COMPLETED.")
+    job_id = ma.fields.Str()
+    project_id = ma.fields.Str()
+    user_id = ma.fields.Str()
+    status = ma.fields.Str()
+    job_type = ma.fields.Str()
+    created_at = ma.fields.DateTime()
+    result = ma.fields.Raw(allow_none=True)
 
 class JobsListSchema(ma.Schema):
     """Schema for list of jobs."""
-    jobs = ma.fields.List(ma.fields.Nested(JobStatusSchema), description="List of jobs.")
+    jobs = ma.fields.List(ma.fields.Nested(JobStatusSchema))
 
 class CostSummarySchema(ma.Schema):
     """Schema for admin cost summary."""
-    total_tokens = ma.fields.Int(description="Total tokens processed across all clients.")
-    total_cost = ma.fields.Float(description="Total cost in dollars.")
-    clients = ma.fields.Raw(description="Per-client breakdown of costs.")
+    total_tokens = ma.fields.Int()
+    total_cost = ma.fields.Float()
+    clients = ma.fields.Raw()
 
 class WikiGenerationRequestSchema(ma.Schema):
     """Request schema for wiki generation (empty body, admin-only)."""
@@ -232,168 +243,11 @@ class WikiGenerationRequestSchema(ma.Schema):
 
 class WikiGenerationResponseSchema(ma.Schema):
     """Response schema for wiki generation job creation."""
-    message = ma.fields.Str(description="Success message.")
-    job_id = ma.fields.Str(description="The job ID to track progress.")
-    status_url = ma.fields.Str(description="The endpoint to check job status.")
+    message = ma.fields.Str()
+    job_id = ma.fields.Str()
+    status_url = ma.fields.Str()
 
-# --- Helper Functions ---
-
-def _get_user_from_request(request) -> Optional[Dict[str, Any]]:
-    """Helper to call the Auth Server and verify the user's token."""
-    auth_header = request.headers.get('Authorization')
-    if not auth_header:
-        return None
-    try:
-        # This call verifies the Firebase token AND gets our internal role/permissions
-        resp = requests.post(f"{AUTH_SERVER_URL}/verify_token", headers={"Authorization": auth_header})
-        if resp.status_code == 200:
-            return resp.json()
-        logging.warning(f"Auth verification failed with status {resp.status_code}: {resp.text}")
-        return None
-    except Exception as e:
-        logging.error(f"Auth verification call failed: {e}")
-        return None
-
-def _check_project_access(auth_data: Dict, project_id: str) -> bool:
-    """Checks if user is admin OR has guest access to the project."""
-    if not auth_data:
-        return False
-    # Admins own their projects. We assume they own the project they are querying.
-    # A more robust check would involve a project_owner_id check here.
-    if auth_data.get('role') == 'admin':
-        return True
-    # Guests must have an explicit entry in their guest_projects list
-    if auth_data.get('role') == 'guest' and project_id in auth_data.get('guest_projects', []):
-        return True
-    return False
-
-def get_user_balance(user_id: str) -> Optional[float]:
-    """
-    Gets the user's current API pool balance.
-    
-    Returns:
-        float: The user's balance on success.
-        None: On any failure (e.g., connection error, non-200 status).
-              This signals the frontend and internal logic to fail-open.
-    """
-    try:
-        resp = requests.get(
-            f"{BILLING_SERVER_URL}/balance/{user_id}",
-            timeout=5
-        )
-        if resp.status_code == 200:
-            return float(resp.json().get('balance', 0.0))
-        
-        # Log non-200 status as a warning
-        logging.warning(f"Billing server returned non-200 status ({resp.status_code}) for user {user_id}: {resp.text}")
-    
-    except Exception as e:
-        # Log connection errors, timeouts, etc.
-        logging.error(f"Failed to connect to billing server for user {user_id}: {e}", exc_info=True)
-    
-    return None  # Return None on any failure (fail-open signal)
-
-def deduct_cost(user_id: str, job_id: str, cost: float, description: str):
-    """Tells the billing server to log a transaction and deduct cost."""
-    try:
-        resp = requests.post(f"{BILLING_SERVER_URL}/deduct", json={
-            "user_id": user_id,
-            "cost": cost,
-            "job_id": job_id,
-            "description": description
-        }, timeout=2.0)
-        if resp.status_code != 200:
-            raise Exception(f"Billing server returned {resp.status_code}")
-    except Exception as e:
-        logging.error(f"Failed to deduct cost for {user_id}: {e}. Logging for reconciliation.")
-        failed_tx_logger.log_failure(user_id, job_id, cost, description)
-
-def get_triage_data(user_query: str, project_id: str) -> Dict[str, Any]:
-    """Call 1: Triage. Determines intent, knowledge source, and memory needs."""
-    prompt = AI_ROUTER_PROMPT_v4.format(user_query=user_query, project_id=project_id)
-    result = triage_client.chat(prompt)
-    try:
-        # The prompt asks for minified JSON
-        data = json.loads(result['response'])
-        return data
-    except Exception as e:
-        logging.error(f"Failed to parse triage JSON: {e}. Defaulting to craft.")
-        # Fallback to a safe, known state
-        return {"intent": "app_support", "knowledge_source": "CAUDEX_SUPPORT_KB", "requires_memory": False}
-
-def resolve_memory(triage_data: Dict, user_id: str, project_id: str) -> Tuple[str, str, List[Dict]]:
-    """
-    Handles Step 1.5 (Memory & Rewrite).
-    Returns: (rewritten_query, chat_history_for_prompt, chat_history_for_llm)
-    """
-    user_query = triage_data['original_query']
-    if not triage_data.get('requires_memory', False):
-        return user_query, "", [] # No rewrite needed, no history list
-
-    logging.info(f"Query '{user_query}' requires memory. Fetching history...")
-    history_list = session_manager.get_recent_history(project_id, user_id)
-    chat_history_str = session_manager.format_history_for_prompt(history_list)
-    
-    # Call 1.5: Rewrite query
-    rewrite_prompt = COREF_RESOLUTION_PROMPT.format(
-        chat_history=chat_history_str,
-        user_query=user_query
-    )
-    result = triage_client.chat(rewrite_prompt) # Use the cheap client
-    
-    rewritten_query = result['response'].strip()
-    logging.info(f"Query rewritten: '{user_query}' -> '{rewritten_query}'")
-    
-    # Return all three formats
-    return rewritten_query, chat_history_str, history_list
-
-def get_chroma_context(query: str, collection_name: str) -> Tuple[Optional[str], bool]:
-    """
-    Calls the Chroma server to get RAG context.
-    
-    Returns:
-        (context_str, True) on success with context.
-        ("", True) if no context was needed.
-        (None, False) on failure.
-    """
-    if not collection_name or collection_name == "NONE":
-        return "", True  # Success, but no context needed
-    
-    try:
-        resp = requests.post(
-            f"{CHROMA_SERVER_URL}/query",
-            json={"collection_name": collection_name, "query_texts": [query], "n_results": 5},
-            timeout=10
-        )
-        if resp.status_code == 200:
-            results = resp.json()
-            docs = results.get('documents', [[]])[0]
-            metadatas = results.get('metadatas', [[]])[0]
-            context_str = "\n\n".join(
-                f"[Source: {meta.get('source_file', 'Unknown')}]\n{doc}"
-                for doc, meta in zip(docs, metadatas)
-            )
-            return context_str, True  # Success with context
-        else:
-            # Handle non-200 status codes
-            logging.warning(f"Chroma server returned non-200 status: {resp.status_code} {resp.text}")
-            return None, False  # Failure
-    except Exception as e:
-        logging.error(f"Failed to get context from Chroma: {e}")
-        return None, False  # Failure
-
-# --- Core Chat Endpoint ---
-
-# NOTE: The /chat endpoint below is currently using @app.route with flasgger documentation.
-# Flask-smorest integration (blp_chat.route, MethodView) is prepared via blueprints (blp_chat, blp_jobs, blp_admin)
-# and Marshmallow schemas (ChatRequestSchema, ChatResponseSchema, etc.) defined above.
-# 
-# Migration Path:
-# 1. Test the new Marshmallow schemas by using them in @blp_chat.route endpoints
-# 2. Gradually convert existing @app.route endpoints to @blp_*.route with proper schema decoration
-# 3. End state: All endpoints use flask-smorest for automatic validation and unified OpenAPI docs
-#
-# For now, we keep existing endpoints working while adding flask-smorest infrastructure.
+# --- Route Definitions (Must be BEFORE blueprint registration) ---
 
 # --- Core Chat Endpoint (Migrated to flask-smorest) ---
 
@@ -624,7 +478,7 @@ class ProjectJobs(MethodView):
         
         return {"project_id": project_id, "jobs": jobs}
 
-# --- WIKI Generation Task ---
+# --- WIKI Generation Task Helper Function ---
 def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
     """
     The actual heavy-lifting for the wiki job.
@@ -718,6 +572,7 @@ def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
         "message": f"Successfully generated and saved {saved_count} wiki files."
     }
 
+# --- WIKI Generation Endpoint ---
 
 @blp_jobs.route('/project/<string:project_id>/generate_wiki')
 class GenerateWiki(MethodView):
@@ -790,6 +645,167 @@ class AdminCosts(MethodView):
         summary = cost_aggregator.get_aggregate_cost()
         
         return summary
+
+
+# *** NOW register blueprints after ALL routes are defined ***
+api.register_blueprint(blp_chat)
+api.register_blueprint(blp_jobs)
+api.register_blueprint(blp_admin)
+
+# --- Helper Functions ---
+
+def _get_user_from_request(request) -> Optional[Dict[str, Any]]:
+    """Helper to call the Auth Server and verify the user's token."""
+    auth_header = request.headers.get('Authorization')
+    if not auth_header:
+        return None
+    try:
+        # This call verifies the Firebase token AND gets our internal role/permissions
+        resp = requests.post(f"{AUTH_SERVER_URL}/verify_token", headers={"Authorization": auth_header})
+        if resp.status_code == 200:
+            return resp.json()
+        logging.warning(f"Auth verification failed with status {resp.status_code}: {resp.text}")
+        return None
+    except Exception as e:
+        logging.error(f"Auth verification call failed: {e}")
+        return None
+
+def _check_project_access(auth_data: Dict, project_id: str) -> bool:
+    """Checks if user is admin OR has guest access to the project."""
+    if not auth_data:
+        return False
+    # Admins own their projects. We assume they own the project they are querying.
+    # A more robust check would involve a project_owner_id check here.
+    if auth_data.get('role') == 'admin':
+        return True
+    # Guests must have an explicit entry in their guest_projects list
+    if auth_data.get('role') == 'guest' and project_id in auth_data.get('guest_projects', []):
+        return True
+    return False
+
+def get_user_balance(user_id: str) -> Optional[float]:
+    """
+    Gets the user's current API pool balance.
+    
+    Returns:
+        float: The user's balance on success.
+        None: On any failure (e.g., connection error, non-200 status).
+              This signals the frontend and internal logic to fail-open.
+    """
+    try:
+        resp = requests.get(
+            f"{BILLING_SERVER_URL}/balance/{user_id}",
+            timeout=5
+        )
+        if resp.status_code == 200:
+            return float(resp.json().get('balance', 0.0))
+        
+        # Log non-200 status as a warning
+        logging.warning(f"Billing server returned non-200 status ({resp.status_code}) for user {user_id}: {resp.text}")
+    
+    except Exception as e:
+        # Log connection errors, timeouts, etc.
+        logging.error(f"Failed to connect to billing server for user {user_id}: {e}", exc_info=True)
+    
+    return None  # Return None on any failure (fail-open signal)
+
+def deduct_cost(user_id: str, job_id: str, cost: float, description: str):
+    """Tells the billing server to log a transaction and deduct cost."""
+    try:
+        resp = requests.post(f"{BILLING_SERVER_URL}/deduct", json={
+            "user_id": user_id,
+            "cost": cost,
+            "job_id": job_id,
+            "description": description
+        }, timeout=2.0)
+        if resp.status_code != 200:
+            raise Exception(f"Billing server returned {resp.status_code}")
+    except Exception as e:
+        logging.error(f"Failed to deduct cost for {user_id}: {e}. Logging for reconciliation.")
+        failed_tx_logger.log_failure(user_id, job_id, cost, description)
+
+def get_triage_data(user_query: str, project_id: str) -> Dict[str, Any]:
+    """Call 1: Triage. Determines intent, knowledge source, and memory needs."""
+    prompt = AI_ROUTER_PROMPT_v4.format(user_query=user_query, project_id=project_id)
+    result = triage_client.chat(prompt)
+    try:
+        # The prompt asks for minified JSON
+        data = json.loads(result['response'])
+        return data
+    except Exception as e:
+        logging.error(f"Failed to parse triage JSON: {e}. Defaulting to craft.")
+        # Fallback to a safe, known state
+        return {"intent": "app_support", "knowledge_source": "CAUDEX_SUPPORT_KB", "requires_memory": False}
+
+def resolve_memory(triage_data: Dict, user_id: str, project_id: str) -> Tuple[str, str, List[Dict]]:
+    """
+    Handles Step 1.5 (Memory & Rewrite).
+    Returns: (rewritten_query, chat_history_for_prompt, chat_history_for_llm)
+    """
+    user_query = triage_data['original_query']
+    if not triage_data.get('requires_memory', False):
+        return user_query, "", [] # No rewrite needed, no history list
+
+    logging.info(f"Query '{user_query}' requires memory. Fetching history...")
+    history_list = session_manager.get_recent_history(project_id, user_id)
+    chat_history_str = session_manager.format_history_for_prompt(history_list)
+    
+    # Call 1.5: Rewrite query
+    rewrite_prompt = COREF_RESOLUTION_PROMPT.format(
+        chat_history=chat_history_str,
+        user_query=user_query
+    )
+    result = triage_client.chat(rewrite_prompt) # Use the cheap client
+    
+    rewritten_query = result['response'].strip()
+    logging.info(f"Query rewritten: '{user_query}' -> '{rewritten_query}'")
+    
+    # Return all three formats
+    return rewritten_query, chat_history_str, history_list
+
+def get_chroma_context(query: str, collection_name: str) -> Tuple[Optional[str], bool]:
+    """
+    Calls the Chroma server to get RAG context.
+    
+    Returns:
+        (context_str, True) on success with context.
+        ("", True) if no context was needed.
+        (None, False) on failure.
+    """
+    if not collection_name or collection_name == "NONE":
+        return "", True  # Success, but no context needed
+    
+    try:
+        resp = requests.post(
+            f"{CHROMA_SERVER_URL}/query",
+            json={"collection_name": collection_name, "query_texts": [query], "n_results": 5},
+            timeout=10
+        )
+        if resp.status_code == 200:
+            results = resp.json()
+            docs = results.get('documents', [[]])[0]
+            metadatas = results.get('metadatas', [[]])[0]
+            context_str = "\n\n".join(
+                f"[Source: {meta.get('source_file', 'Unknown')}]\n{doc}"
+                for doc, meta in zip(docs, metadatas)
+            )
+            return context_str, True  # Success with context
+        else:
+            # Handle non-200 status codes
+            logging.warning(f"Chroma server returned non-200 status: {resp.status_code} {resp.text}")
+            return None, False  # Failure
+    except Exception as e:
+        logging.error(f"Failed to get context from Chroma: {e}")
+        return None, False  # Failure
+
+# --- Core Chat Endpoint ---
+
+# NOTE: The /chat endpoint below is currently using @app.route with flasgger documentation.
+# Flask-smorest integration (blp_chat.route, MethodView) is prepared via blueprints (blp_chat, blp_jobs, blp_admin)
+# and Marshmallow schemas (ChatRequestSchema, ChatResponseSchema, etc.) defined above.
+# 
+# Migration Path:
+# 1. Test the new Marshmallow schemas by using them in @blp_chat.route endpoints
 
 
 if __name__ == '__main__':

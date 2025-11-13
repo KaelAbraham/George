@@ -1,15 +1,15 @@
 # 🌉 Frontend-Backend Bridge Test - LIVE
 
-## ✅ Status: RUNNING
+## ✅ Status: RUNNING WITH REAL BACKEND
 
 ### 🖥️ Servers Active
 
-**Backend Server (Mock)** ✅
-- URL: http://localhost:5001
+**Backend Server (Real)** ✅
+- URL: http://localhost:5000
 - Status: Running
-- Purpose: Mock API for testing bridge without full backend dependencies
-- File: `mock_backend.py`
-- Terminal ID: `36d1a4bf-ed22-4fa5-8289-d8c044ab92f6`
+- Purpose: Production Flask backend with Gemini integration
+- File: `backend/app.py`
+- API Docs: http://localhost:5000/api/docs
 
 **Frontend Dev Server** ✅
 - URL: http://localhost:5173
@@ -38,11 +38,12 @@
 
 ---
 
-## 📡 API Endpoints (Mock Backend)
+## 📡 API Endpoints (Real Backend)
 
 ✅ `POST /chat`
 - Request: `{ "query": "...", "project_id": "..." }`
 - Response: `{ "response": "...", "intent": "...", "cost": 0.005, ... }`
+- Uses Gemini API for intelligent responses
 
 ✅ `GET /jobs/<job_id>`
 - Returns job status and progress
@@ -55,6 +56,8 @@
 
 ✅ `GET /admin/costs`
 - Returns aggregated cost summary
+
+**Full Documentation:** http://localhost:5000/api/docs (Swagger UI)
 
 ---
 
@@ -73,8 +76,8 @@
 3. **API Communication**
    - Frontend → http://localhost:5173 (Vite)
    - Vite serves static files and compiled TypeScript
-   - axios makes HTTP calls to http://localhost:5001 (Mock Backend)
-   - Mock Backend returns JSON responses
+   - axios makes HTTP calls to http://localhost:5000 (Real Backend)
+   - Real Backend processes requests and integrates with Gemini API
 
 ---
 
@@ -115,8 +118,10 @@
 - `frontend/package.json` - Dependencies & scripts
 
 **Backend:**
-- `mock_backend.py` - Mock Flask server for testing
-- `backend/app.py` - Real backend (currently has import errors)
+- `backend/app.py` - Real Flask backend with flask-smorest, Gemini integration
+- `backend/llm_client.py` - GeminiClient and cost tracking
+- `backend/session_manager.py` - Session state management
+- `backend/job_manager.py` - Background job queue
 
 ---
 
@@ -144,8 +149,9 @@
 To replicate this session:
 
 ```bash
-# Terminal 1: Start mock backend
-python mock_backend.py
+# Terminal 1: Start real backend
+cd backend
+python app.py
 
 # Terminal 2: Start frontend dev server
 cd frontend
@@ -153,18 +159,20 @@ npm run dev
 
 # Then visit:
 # http://localhost:5173/hello.html
+# API Docs: http://localhost:5000/api/docs
 ```
 
 ---
 
 ## 🎯 Success Criteria
 
-- ✅ Mock backend running on port 5001
+- ✅ Real backend running on port 5000
 - ✅ Vite dev server running on port 5173
 - ✅ hello.html loads without errors
 - ✅ "Bridge is LIVE!" message appears
 - ✅ API response shows in browser console
-- ✅ All 5 endpoints testable via test-bridge.html
+- ✅ All 5 endpoints working with Gemini integration
+- ✅ OpenAPI documentation available at /api/docs
 
 ---
 
