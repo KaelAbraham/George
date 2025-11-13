@@ -300,6 +300,69 @@ def get_chroma_context(query: str, collection_name: str) -> Tuple[Optional[str],
 def chat():
     """
     Main stateless chat endpoint using the 3-call loop.
+    ---
+    tags:
+      - Chat
+    summary: Send a query to the AI chat router.
+    description: >
+      This is the main endpoint for all user-facing chat interactions.
+      It requires an Authorization token and a JSON payload with `query` and `project_id`.
+      The backend handles intent routing, knowledge retrieval, and cost management.
+    security:
+      - BearerAuth: []
+    parameters:
+      - name: Authorization
+        in: header
+        required: true
+        description: 'Bearer <FIREBASE_ID_TOKEN>'
+        schema:
+          type: string
+          example: 'Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6ImYx...'
+      - name: body
+        in: body
+        required: true
+        schema:
+          id: ChatRequest
+          required:
+            - query
+            - project_id
+          properties:
+            query:
+              type: string
+              description: The user's query text.
+              example: "Who is Hugh Sinclair?"
+            project_id:
+              type: string
+              description: The unique ID for the project context.
+              example: "p-abc123xyz"
+    responses:
+      200:
+        description: Successful chat response.
+        schema:
+          id: ChatResponse
+          properties:
+            response:
+              type: string
+              description: The AI's final, polished answer.
+            intent:
+              type: string
+              description: The intent classification from the AI router.
+            cost:
+              type: number
+              description: The cost deducted for this specific call.
+            downgraded:
+              type: boolean
+              description: True if a Pro model was downgraded to Flash due to low balance.
+            balance:
+              type: number
+              description: The user's new balance after the transaction. (null if billing server fails)
+              nullable: true
+      401:
+        description: Invalid or missing authentication token.
+      403:
+        description: User does not have permission to access this project.
+      503:
+        description: A dependent microservice (like the Knowledge Base) is unavailable.
     """
     # 1. AUTHENTICATION (The "Gatekeeper")
     auth_data = _get_user_from_request(request)
@@ -464,6 +527,65 @@ def chat():
 
 @app.route('/jobs/<job_id>', methods=['GET'])
 def get_job_status(job_id):
+    """
+    Get the status of a background job.
+    ---
+    tags:
+      - Jobs
+    summary: Retrieve job status and progress.
+    description: >
+      Returns the current status of a background job (e.g., wiki generation).
+      Jobs are user-scoped, so you can only retrieve your own jobs.
+    security:
+      - BearerAuth: []
+    parameters:
+      - name: job_id
+        in: path
+        type: string
+        required: true
+        description: The unique job ID.
+        example: "job-abc123xyz"
+      - name: Authorization
+        in: header
+        required: true
+        description: 'Bearer <FIREBASE_ID_TOKEN>'
+        schema:
+          type: string
+    responses:
+      200:
+        description: Job status retrieved successfully.
+        schema:
+          id: JobStatus
+          properties:
+            job_id:
+              type: string
+              description: The unique job ID.
+            project_id:
+              type: string
+              description: The project ID associated with the job.
+            user_id:
+              type: string
+              description: The user who created the job.
+            status:
+              type: string
+              enum: [PENDING, IN_PROGRESS, COMPLETED, FAILED]
+              description: Current job status.
+            job_type:
+              type: string
+              description: The type of job (e.g., 'wiki_generation').
+            created_at:
+              type: string
+              format: date-time
+              description: When the job was created.
+            result:
+              type: object
+              nullable: true
+              description: Job result (populated when COMPLETED).
+      401:
+        description: Invalid or missing authentication token.
+      404:
+        description: Job not found or user does not have access to this job.
+    """
     # 1. AUTHENTICATION
     auth_data = _get_user_from_request(request)
     if not auth_data or not auth_data.get('valid'):
@@ -482,6 +604,46 @@ def get_job_status(job_id):
 
 @app.route('/project/<project_id>/jobs', methods=['GET'])
 def get_project_jobs(project_id):
+    """
+    Get all jobs for a specific project.
+    ---
+    tags:
+      - Jobs
+    summary: List all jobs for a project.
+    description: >
+      Returns a list of all background jobs for the specified project,
+      scoped to the authenticated user. Only returns jobs that belong to you.
+    security:
+      - BearerAuth: []
+    parameters:
+      - name: project_id
+        in: path
+        type: string
+        required: true
+        description: The unique project ID.
+        example: "p-abc123xyz"
+      - name: Authorization
+        in: header
+        required: true
+        description: 'Bearer <FIREBASE_ID_TOKEN>'
+        schema:
+          type: string
+    responses:
+      200:
+        description: Jobs retrieved successfully.
+        schema:
+          id: JobsList
+          properties:
+            jobs:
+              type: array
+              items:
+                $ref: '#/definitions/JobStatus'
+              description: List of jobs for this project.
+      401:
+        description: Invalid or missing authentication token.
+      404:
+        description: Project not found or user does not have access.
+    """
     # 1. AUTHENTICATION
     auth_data = _get_user_from_request(request)
     if not auth_data or not auth_data.get('valid'):
@@ -593,6 +755,56 @@ def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
 
 @app.route('/project/<project_id>/generate_wiki', methods=['POST'])
 def generate_wiki(project_id):
+    """
+    Start a background wiki/report generation job.
+    ---
+    tags:
+      - Premium Features
+    summary: Generate a comprehensive wiki report for a project.
+    description: >
+      Initiates a background job to generate a comprehensive wiki report
+      for the specified project. This is a premium feature that requires
+      admin permissions and a minimum account balance ($1.00).
+      The job runs asynchronously and can be checked via the /jobs/<job_id> endpoint.
+    security:
+      - BearerAuth: []
+    parameters:
+      - name: project_id
+        in: path
+        type: string
+        required: true
+        description: The unique project ID.
+        example: "p-abc123xyz"
+      - name: Authorization
+        in: header
+        required: true
+        description: 'Bearer <FIREBASE_ID_TOKEN>'
+        schema:
+          type: string
+    responses:
+      202:
+        description: Wiki generation job created successfully and is being processed.
+        schema:
+          id: WikiGenerationResponse
+          properties:
+            message:
+              type: string
+              example: "Wiki generation has started."
+            job_id:
+              type: string
+              description: The job ID to track progress.
+              example: "job-xyz789"
+            status_url:
+              type: string
+              description: The endpoint to check job status.
+              example: "/jobs/job-xyz789"
+      401:
+        description: Invalid or missing authentication token.
+      402:
+        description: Insufficient account balance (requires $1.00 minimum).
+      403:
+        description: User must be a project admin to generate wiki reports.
+    """
     auth_data = _get_user_from_request(request)
     if not auth_data or auth_data['role'] != 'admin':
         return jsonify({"error": "Only project admins can run reports."}), 403
@@ -640,6 +852,49 @@ def generate_wiki(project_id):
 def get_cost_summary():
     """
     [ADMIN-ONLY] Gets an aggregate cost summary from all LLM clients.
+    ---
+    tags:
+      - Admin
+    summary: Get aggregate LLM cost summary.
+    description: >
+      Admin-only endpoint that returns a real-time aggregate cost summary
+      across all LLM client instances in the system (Triage, Flash, Pro, Polish).
+      Useful for operational monitoring and cost analysis.
+    security:
+      - BearerAuth: []
+    parameters:
+      - name: Authorization
+        in: header
+        required: true
+        description: 'Bearer <FIREBASE_ID_TOKEN> (must be admin role)'
+        schema:
+          type: string
+    responses:
+      200:
+        description: Cost summary retrieved successfully.
+        schema:
+          id: CostSummary
+          properties:
+            total_tokens:
+              type: integer
+              description: Total tokens processed across all clients.
+            total_cost:
+              type: number
+              description: Total cost in dollars.
+            clients:
+              type: object
+              description: Per-client breakdown of costs.
+              properties:
+                triage_client:
+                  $ref: '#/definitions/ClientCostMetrics'
+                answer_flash_client:
+                  $ref: '#/definitions/ClientCostMetrics'
+                answer_pro_client:
+                  $ref: '#/definitions/ClientCostMetrics'
+                polish_client:
+                  $ref: '#/definitions/ClientCostMetrics'
+      403:
+        description: User must have admin role to access this endpoint.
     """
     # 1. AUTHENTICATION (Must be an admin)
     auth_data = _get_user_from_request(request)
