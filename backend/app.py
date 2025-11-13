@@ -7,9 +7,10 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime
 from flask import Flask, request, jsonify
+from flask.views import MethodView
 from dotenv import load_dotenv
 from typing import Dict, Any, Optional, List, Tuple
-from flask_smorest import Api
+from flask_smorest import Api, abort
 
 # --- Local Imports ---
 # These are the new foundational services we just planned
@@ -392,232 +393,179 @@ def get_chroma_context(query: str, collection_name: str) -> Tuple[Optional[str],
 #
 # For now, we keep existing endpoints working while adding flask-smorest infrastructure.
 
-@app.route('/chat', methods=['POST'])
-def chat():
-    """
-    Main stateless chat endpoint using the 3-call loop.
-    ---
-    tags:
-      - Chat
-    summary: Send a query to the AI chat router.
-    description: >
-      This is the main endpoint for all user-facing chat interactions.
-      It requires an Authorization token and a JSON payload with `query` and `project_id`.
-      The backend handles intent routing, knowledge retrieval, and cost management.
-    security:
-      - BearerAuth: []
-    parameters:
-      - name: Authorization
-        in: header
-        required: true
-        description: 'Bearer <FIREBASE_ID_TOKEN>'
-        schema:
-          type: string
-          example: 'Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6ImYx...'
-      - name: body
-        in: body
-        required: true
-        schema:
-          id: ChatRequest
-          required:
-            - query
-            - project_id
-          properties:
-            query:
-              type: string
-              description: The user's query text.
-              example: "Who is Hugh Sinclair?"
-            project_id:
-              type: string
-              description: The unique ID for the project context.
-              example: "p-abc123xyz"
-    responses:
-      200:
-        description: Successful chat response.
-        schema:
-          id: ChatResponse
-          properties:
-            response:
-              type: string
-              description: The AI's final, polished answer.
-            intent:
-              type: string
-              description: The intent classification from the AI router.
-            cost:
-              type: number
-              description: The cost deducted for this specific call.
-            downgraded:
-              type: boolean
-              description: True if a Pro model was downgraded to Flash due to low balance.
-            balance:
-              type: number
-              description: The user's new balance after the transaction. (null if billing server fails)
-              nullable: true
-      401:
-        description: Invalid or missing authentication token.
-      403:
-        description: User does not have permission to access this project.
-      503:
-        description: A dependent microservice (like the Knowledge Base) is unavailable.
-    """
-    # 1. AUTHENTICATION (The "Gatekeeper")
-    auth_data = _get_user_from_request(request)
-    if not auth_data or not auth_data['valid']:
-        return jsonify({"error": "Invalid or missing token"}), 401
-    
-    user_id = auth_data['user_id']
-    user_role = auth_data['role']
-    
-    data = request.get_json()
-    user_query = data.get('query')
-    project_id = data.get('project_id')
+# --- Core Chat Endpoint (Migrated to flask-smorest) ---
 
-    if not user_query or not project_id:
-        return jsonify({"error": "query and project_id are required"}), 400
-    
-    # 2. PERMISSION CHECK
-    if not _check_project_access(auth_data, project_id):
-        logging.warning(f"User {user_id} (role: {user_role}) denied access to {project_id}.")
-        return jsonify({"error": "You do not have permission to access this project."}), 403
+@blp_chat.route('/chat')
+class Chat(MethodView):
+    """Main stateless chat endpoint using the 3-call loop."""
 
-    try:
-        # --- CALL 1: TRIAGE ---
-        triage_data = get_triage_data(user_query, project_id)
-        triage_data['original_query'] = user_query
-        intent = triage_data.get('intent')
-        
-        # --- GUARDRAILS ---
-        if intent == "creative_task":
-            logging.warning(f"User {user_id} triggered creative guardrail.")
-            response_text = "I see you're working on a creative task! My role is to be your diagnostic partner, not a co-writer. If you write a draft, I'd be happy to analyze it for you."
-            session_manager.add_turn(project_id, user_id, user_query, response_text)
-            return jsonify({"response": response_text}), 200
-        
-        if intent == "emotional_support":
-            logging.info(f"User {user_id} triggered emotional support.")
-            response_text = "It sounds like you're stuck. That's a normal part of the creative process! Take a short break, or try approaching the scene from a different character's perspective."
-            session_manager.add_turn(project_id, user_id, user_query, response_text)
-            return jsonify({"response": response_text}), 200
-
-        # --- CALL 1.5: MEMORY & REWRITE ---
-        rewritten_query, chat_history_str, history_list = resolve_memory(triage_data, user_id, project_id)
-
-        # --- RESOURCE GATHERING ---
-        kb_name = ""
-        if triage_data.get('knowledge_source') == "PROJECT_KB":
-            kb_name = f"project_{project_id}"
-        elif triage_data.get('knowledge_source') == "CAUDEX_SUPPORT_KB":
-            kb_name = "george_craft_library"  # Your static craft guides
-        # Add future "EXTERNAL_API" logic here
-        
-        context_str, context_success = get_chroma_context(rewritten_query, kb_name)
-        
-        # RESILIENCE CHECK: If Chroma failed, abort gracefully with 503
-        if not context_success:
-            logger.error(f"[RESILIENCE] Aborting chat for user {user_id} due to Chroma failure.")
-            return jsonify({
-                "error": "Your knowledge base is temporarily unavailable. Please try again in a moment."
-            }), 503  # Service Unavailable
-
-        # --- CALL 2: EXECUTION & COST GOVERNOR ---
-        
-        # 1. Check Balance
-        user_balance_or_none = get_user_balance(user_id)
-        billing_server_failed = (user_balance_or_none is None)
-        
-        # Default to 0.0 for calculations, but we use the None for logic
-        user_balance = user_balance_or_none if not billing_server_failed else 0.0
-
-        if billing_server_failed:
-            logger.warning(f"[FAIL-OPEN] Billing server failed for user {user_id}. Allowing Pro model.")
-
-        # 2. Select Model based on Governor
-        model_to_use = answer_client_flash
-        downgrade_flag = False
-        
-        if intent == 'complex_analysis' and user_role == 'admin':  # Guests can't use Pro
-            
-            # Use Pro model if:
-            # A) Billing server failed (fail-open principle)
-            # B) Billing server succeeded AND balance is sufficient
-            
-            if billing_server_failed or user_balance >= PRO_MODEL_THRESHOLD:
-                model_to_use = answer_client_pro
-                if billing_server_failed:
-                    logger.info(f"User {user_id}: Using PRO model (Billing server failed, fail-open).")
-                else:
-                    logger.info(f"User {user_id} has ${user_balance:.2f}. Using PRO model.")
-            else:
-                # This 'else' block now only runs if billing succeeded AND balance is low
-                downgrade_flag = True
-                logger.info(f"User {user_id} has ${user_balance:.2f}. Downgrading to FLASH.")
-        elif user_role == 'guest' and intent == 'complex_analysis':
-             downgrade_flag = True  # Guests are always "downgraded" for complex tasks
-             logger.info(f"User {user_id} is a GUEST. Forcing FLASH model for complex task.")
-
-        # 3. Assemble Main Prompt
-        main_prompt = f"""
-        {GEORGE_CONSTITUTION}
-
-        USER QUERY:
-        {user_query}
-
-        ---
-        RETRIEVED CONTEXT (Vetted Sources):
-        {context_str}
-        ---
-
-        Based *only* on the RETRIEVED CONTEXT, answer the USER QUERY.
+    @blp_chat.doc(
+        description="Main endpoint for all user-facing chat interactions. Requires an Authorization token.",
+        summary="Send a query to the AI chat router."
+    )
+    @blp_chat.arguments(ChatRequestSchema, location="json")
+    @blp_chat.response(200, ChatResponseSchema)
+    def post(self, data):
         """
+        Main stateless chat endpoint using the 3-call loop.
         
-        # 4. Get Draft Answer
-        # We pass the history_list (Gemini-formatted) to the chat() method
-        result_dict = model_to_use.chat(main_prompt, history=history_list)
-        draft_answer = result_dict['response']
-        call_cost = result_dict.get('cost', 0.0)
+        Accepts a JSON payload with `query` and `project_id`.
+        The backend handles intent routing, knowledge retrieval, and cost management.
+        """
+        # 1. AUTHENTICATION (The "Gatekeeper")
+        auth_data = _get_user_from_request(request)
+        if not auth_data or not auth_data['valid']:
+            abort(401, message="Invalid or missing token")
+        
+        user_id = auth_data['user_id']
+        user_role = auth_data['role']
+        
+        # data is automatically validated by ChatRequestSchema
+        user_query = data['query']
+        project_id = data['project_id']
+        
+        # 2. PERMISSION CHECK
+        if not _check_project_access(auth_data, project_id):
+            logging.warning(f"User {user_id} (role: {user_role}) denied access to {project_id}.")
+            abort(403, message="You do not have permission to access this project.")
 
-        # 5. Report Cost to Billing Server
-        if call_cost > 0:
-            deduct_cost(user_id, f"chat-{uuid.uuid4()}", call_cost, f"Chat: {intent}")
-
-        # --- CALL 3: "GEORGEIFICATION" POLISH ---
-        
-        polish_instructions = "Rephrase the DRAFT ANSWER to be natural, helpful, and consistent with your persona."
-        
-        if downgrade_flag:
-            polish_instructions = (
-                "You must also add a gentle, friendly upsell. Explain that this is a complex question "
-                "and you could provide a much deeper analysis with a 'pick-me-up' (a $5 coffee) to "
-                "activate your advanced reasoning module."
-            )
-
-        polish_prompt = POLISH_PROMPT.format(
-            polish_instructions=polish_instructions,
-            draft_answer=draft_answer
-        )
-        
-        polish_result = polish_client.chat(polish_prompt)
-        final_answer = polish_result['response']
-        
-        # --- SAVE & RESPOND ---
-        session_manager.add_turn(project_id, user_id, user_query, final_answer)
-        
-        # Calculate final balance, handling billing server failure
-        final_balance = None
-        if not billing_server_failed:
-            final_balance = user_balance - call_cost
+        try:
+            # --- CALL 1: TRIAGE ---
+            triage_data = get_triage_data(user_query, project_id)
+            triage_data['original_query'] = user_query
+            intent = triage_data.get('intent')
             
-        return jsonify({
-            "response": final_answer,
-            "intent": intent,
-            "cost": call_cost,
-            "downgraded": downgrade_flag,
-            "balance": final_balance  # This will be 'null' in JSON if billing failed
-        })
+            # --- GUARDRAILS ---
+            if intent == "creative_task":
+                logging.warning(f"User {user_id} triggered creative guardrail.")
+                response_text = "I see you're working on a creative task! My role is to be your diagnostic partner, not a co-writer. If you write a draft, I'd be happy to analyze it for you."
+                session_manager.add_turn(project_id, user_id, user_query, response_text)
+                return {"response": response_text}
+            
+            if intent == "emotional_support":
+                logging.info(f"User {user_id} triggered emotional support.")
+                response_text = "It sounds like you're stuck. That's a normal part of the creative process! Take a short break, or try approaching the scene from a different character's perspective."
+                session_manager.add_turn(project_id, user_id, user_query, response_text)
+                return {"response": response_text}
 
-    except Exception as e:
-        logging.error(f"Critical error in /chat: {e}", exc_info=True)
-        return jsonify({"error": "An internal server error occurred."}), 500
+            # --- CALL 1.5: MEMORY & REWRITE ---
+            rewritten_query, chat_history_str, history_list = resolve_memory(triage_data, user_id, project_id)
+
+            # --- RESOURCE GATHERING ---
+            kb_name = ""
+            if triage_data.get('knowledge_source') == "PROJECT_KB":
+                kb_name = f"project_{project_id}"
+            elif triage_data.get('knowledge_source') == "CAUDEX_SUPPORT_KB":
+                kb_name = "george_craft_library"  # Your static craft guides
+            # Add future "EXTERNAL_API" logic here
+            
+            context_str, context_success = get_chroma_context(rewritten_query, kb_name)
+            
+            # RESILIENCE CHECK: If Chroma failed, abort gracefully with 503
+            if not context_success:
+                logger.error(f"[RESILIENCE] Aborting chat for user {user_id} due to Chroma failure.")
+                abort(503, message="Your knowledge base is temporarily unavailable. Please try again in a moment.")
+
+            # --- CALL 2: EXECUTION & COST GOVERNOR ---
+            
+            # 1. Check Balance
+            user_balance_or_none = get_user_balance(user_id)
+            billing_server_failed = (user_balance_or_none is None)
+            
+            # Default to 0.0 for calculations, but we use the None for logic
+            user_balance = user_balance_or_none if not billing_server_failed else 0.0
+
+            if billing_server_failed:
+                logger.warning(f"[FAIL-OPEN] Billing server failed for user {user_id}. Allowing Pro model.")
+
+            # 2. Select Model based on Governor
+            model_to_use = answer_client_flash
+            downgrade_flag = False
+            
+            if intent == 'complex_analysis' and user_role == 'admin':  # Guests can't use Pro
+                
+                # Use Pro model if:
+                # A) Billing server failed (fail-open principle)
+                # B) Billing server succeeded AND balance is sufficient
+                
+                if billing_server_failed or user_balance >= PRO_MODEL_THRESHOLD:
+                    model_to_use = answer_client_pro
+                    if billing_server_failed:
+                        logger.info(f"User {user_id}: Using PRO model (Billing server failed, fail-open).")
+                    else:
+                        logger.info(f"User {user_id} has ${user_balance:.2f}. Using PRO model.")
+                else:
+                    # This 'else' block now only runs if billing succeeded AND balance is low
+                    downgrade_flag = True
+                    logger.info(f"User {user_id} has ${user_balance:.2f}. Downgrading to FLASH.")
+            elif user_role == 'guest' and intent == 'complex_analysis':
+                 downgrade_flag = True  # Guests are always "downgraded" for complex tasks
+                 logger.info(f"User {user_id} is a GUEST. Forcing FLASH model for complex task.")
+
+            # 3. Assemble Main Prompt
+            main_prompt = f"""
+            {GEORGE_CONSTITUTION}
+
+            USER QUERY:
+            {user_query}
+
+            ---
+            RETRIEVED CONTEXT (Vetted Sources):
+            {context_str}
+            ---
+
+            Based *only* on the RETRIEVED CONTEXT, answer the USER QUERY.
+            """
+            
+            # 4. Get Draft Answer
+            # We pass the history_list (Gemini-formatted) to the chat() method
+            result_dict = model_to_use.chat(main_prompt, history=history_list)
+            draft_answer = result_dict['response']
+            call_cost = result_dict.get('cost', 0.0)
+
+            # 5. Report Cost to Billing Server
+            if call_cost > 0:
+                deduct_cost(user_id, f"chat-{uuid.uuid4()}", call_cost, f"Chat: {intent}")
+
+            # --- CALL 3: "GEORGEIFICATION" POLISH ---
+            
+            polish_instructions = "Rephrase the DRAFT ANSWER to be natural, helpful, and consistent with your persona."
+            
+            if downgrade_flag:
+                polish_instructions = (
+                    "You must also add a gentle, friendly upsell. Explain that this is a complex question "
+                    "and you could provide a much deeper analysis with a 'pick-me-up' (a $5 coffee) to "
+                    "activate your advanced reasoning module."
+                )
+
+            polish_prompt = POLISH_PROMPT.format(
+                polish_instructions=polish_instructions,
+                draft_answer=draft_answer
+            )
+            
+            polish_result = polish_client.chat(polish_prompt)
+            final_answer = polish_result['response']
+            
+            # --- SAVE & RESPOND ---
+            session_manager.add_turn(project_id, user_id, user_query, final_answer)
+            
+            # Calculate final balance, handling billing server failure
+            final_balance = None
+            if not billing_server_failed:
+                final_balance = user_balance - call_cost
+                
+            # Return dict; flask-smorest handles JSON serialization via ChatResponseSchema
+            return {
+                "response": final_answer,
+                "intent": intent,
+                "cost": call_cost,
+                "downgraded": downgrade_flag,
+                "balance": final_balance
+            }
+
+        except Exception as e:
+            logging.error(f"Critical error in /chat: {e}", exc_info=True)
+            abort(500, message="An internal server error occurred.")
 
 # --- Job/Report Endpoints ---
 
