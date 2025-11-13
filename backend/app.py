@@ -569,138 +569,58 @@ class Chat(MethodView):
 
 # --- Job/Report Endpoints ---
 
-@app.route('/jobs/<job_id>', methods=['GET'])
-def get_job_status(job_id):
-    """
-    Get the status of a background job.
-    ---
-    tags:
-      - Jobs
-    summary: Retrieve job status and progress.
-    description: >
-      Returns the current status of a background job (e.g., wiki generation).
-      Jobs are user-scoped, so you can only retrieve your own jobs.
-    security:
-      - BearerAuth: []
-    parameters:
-      - name: job_id
-        in: path
-        type: string
-        required: true
-        description: The unique job ID.
-        example: "job-abc123xyz"
-      - name: Authorization
-        in: header
-        required: true
-        description: 'Bearer <FIREBASE_ID_TOKEN>'
-        schema:
-          type: string
-    responses:
-      200:
-        description: Job status retrieved successfully.
-        schema:
-          id: JobStatus
-          properties:
-            job_id:
-              type: string
-              description: The unique job ID.
-            project_id:
-              type: string
-              description: The project ID associated with the job.
-            user_id:
-              type: string
-              description: The user who created the job.
-            status:
-              type: string
-              enum: [PENDING, IN_PROGRESS, COMPLETED, FAILED]
-              description: Current job status.
-            job_type:
-              type: string
-              description: The type of job (e.g., 'wiki_generation').
-            created_at:
-              type: string
-              format: date-time
-              description: When the job was created.
-            result:
-              type: object
-              nullable: true
-              description: Job result (populated when COMPLETED).
-      401:
-        description: Invalid or missing authentication token.
-      404:
-        description: Job not found or user does not have access to this job.
-    """
-    # 1. AUTHENTICATION
-    auth_data = _get_user_from_request(request)
-    if not auth_data or not auth_data.get('valid'):
-        return jsonify({"error": "Invalid or missing token"}), 401
-    
-    user_id = auth_data.get('user_id')
-    
-    # 2. Get Job (now securely scoped by the JobManager)
-    job = job_manager.get_job(job_id, user_id)
-    
-    if not job:
-        # This now correctly returns 404 if the job doesn't exist OR if the user doesn't own it
-        return jsonify({"error": "Job not found"}), 404
-    
-    return jsonify(job)
+@blp_jobs.route('/jobs/<string:job_id>')
+class JobStatus(MethodView):
+    """Get the status of a background job."""
 
-@app.route('/project/<project_id>/jobs', methods=['GET'])
-def get_project_jobs(project_id):
-    """
-    Get all jobs for a specific project.
-    ---
-    tags:
-      - Jobs
-    summary: List all jobs for a project.
-    description: >
-      Returns a list of all background jobs for the specified project,
-      scoped to the authenticated user. Only returns jobs that belong to you.
-    security:
-      - BearerAuth: []
-    parameters:
-      - name: project_id
-        in: path
-        type: string
-        required: true
-        description: The unique project ID.
-        example: "p-abc123xyz"
-      - name: Authorization
-        in: header
-        required: true
-        description: 'Bearer <FIREBASE_ID_TOKEN>'
-        schema:
-          type: string
-    responses:
-      200:
-        description: Jobs retrieved successfully.
-        schema:
-          id: JobsList
-          properties:
-            jobs:
-              type: array
-              items:
-                $ref: '#/definitions/JobStatus'
-              description: List of jobs for this project.
-      401:
-        description: Invalid or missing authentication token.
-      404:
-        description: Project not found or user does not have access.
-    """
-    # 1. AUTHENTICATION
-    auth_data = _get_user_from_request(request)
-    if not auth_data or not auth_data.get('valid'):
-        return jsonify({"error": "Invalid or missing token"}), 401
-    
-    user_id = auth_data.get('user_id')
-    
-    # 2. Get Jobs (now securely scoped to this user)
-    jobs = job_manager.get_jobs_for_project(project_id, user_id)
-    
-    logger.info(f"User {user_id} retrieved {len(jobs)} jobs for project {project_id}")
-    
-    return jsonify({"project_id": project_id, "jobs": jobs})
+    @blp_jobs.doc(
+        description="Get the status of a background job (e.g., wiki generation). Jobs are user-scoped.",
+        summary="Retrieve job status and progress."
+    )
+    @blp_jobs.response(200, JobStatusSchema)
+    def get(self, job_id):
+        """Get the status of a background job."""
+        # 1. AUTHENTICATION
+        auth_data = _get_user_from_request(request)
+        if not auth_data or not auth_data.get('valid'):
+            abort(401, message="Invalid or missing token")
+        
+        user_id = auth_data.get('user_id')
+        
+        # 2. Get Job (now securely scoped by the JobManager)
+        job = job_manager.get_job(job_id, user_id)
+        
+        if not job:
+            # This now correctly returns 404 if the job doesn't exist OR if the user doesn't own it
+            abort(404, message="Job not found")
+        
+        return job
+
+
+@blp_jobs.route('/project/<string:project_id>/jobs')
+class ProjectJobs(MethodView):
+    """Get all jobs for a specific project."""
+
+    @blp_jobs.doc(
+        description="Returns a list of all background jobs for the specified project, scoped to the authenticated user.",
+        summary="List all jobs for a project."
+    )
+    @blp_jobs.response(200, JobsListSchema)
+    def get(self, project_id):
+        """Get all jobs for a specific project."""
+        # 1. AUTHENTICATION
+        auth_data = _get_user_from_request(request)
+        if not auth_data or not auth_data.get('valid'):
+            abort(401, message="Invalid or missing token")
+        
+        user_id = auth_data.get('user_id')
+        
+        # 2. Get Jobs (now securely scoped to this user)
+        jobs = job_manager.get_jobs_for_project(project_id, user_id)
+        
+        logger.info(f"User {user_id} retrieved {len(jobs)} jobs for project {project_id}")
+        
+        return {"project_id": project_id, "jobs": jobs}
 
 # --- WIKI Generation Task ---
 def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
@@ -797,159 +717,77 @@ def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
     }
 
 
-@app.route('/project/<project_id>/generate_wiki', methods=['POST'])
-def generate_wiki(project_id):
-    """
-    Start a background wiki/report generation job.
-    ---
-    tags:
-      - Premium Features
-    summary: Generate a comprehensive wiki report for a project.
-    description: >
-      Initiates a background job to generate a comprehensive wiki report
-      for the specified project. This is a premium feature that requires
-      admin permissions and a minimum account balance ($1.00).
-      The job runs asynchronously and can be checked via the /jobs/<job_id> endpoint.
-    security:
-      - BearerAuth: []
-    parameters:
-      - name: project_id
-        in: path
-        type: string
-        required: true
-        description: The unique project ID.
-        example: "p-abc123xyz"
-      - name: Authorization
-        in: header
-        required: true
-        description: 'Bearer <FIREBASE_ID_TOKEN>'
-        schema:
-          type: string
-    responses:
-      202:
-        description: Wiki generation job created successfully and is being processed.
-        schema:
-          id: WikiGenerationResponse
-          properties:
-            message:
-              type: string
-              example: "Wiki generation has started."
-            job_id:
-              type: string
-              description: The job ID to track progress.
-              example: "job-xyz789"
-            status_url:
-              type: string
-              description: The endpoint to check job status.
-              example: "/jobs/job-xyz789"
-      401:
-        description: Invalid or missing authentication token.
-      402:
-        description: Insufficient account balance (requires $1.00 minimum).
-      403:
-        description: User must be a project admin to generate wiki reports.
-    """
-    auth_data = _get_user_from_request(request)
-    if not auth_data or auth_data['role'] != 'admin':
-        return jsonify({"error": "Only project admins can run reports."}), 403
-    
-    user_id = auth_data['user_id']
-    
-    # 1. Check API pool balance BEFORE starting the job
-    user_balance = get_user_balance(user_id)
-    if user_balance < WIKI_JOB_MIN_BALANCE:
-        logger.warning(f"User {user_id} tried to start wiki job with insufficient balance (${user_balance:.2f}).")
-        return jsonify({
-            "error": f"Insufficient balance. This report requires a minimum balance of ${WIKI_JOB_MIN_BALANCE:.2f}.",
-            "balance_required": WIKI_JOB_MIN_BALANCE,
-            "balance_current": round(user_balance, 2)
-        }), 402  # 402 Payment Required
-    
-    # 2. Create the job "receipt"
-    job_id = job_manager.create_job(
-        project_id=project_id, 
-        user_id=user_id, 
-        job_type="wiki_generation"
+@blp_jobs.route('/project/<string:project_id>/generate_wiki')
+class GenerateWiki(MethodView):
+    """Start a background wiki/report generation job."""
+
+    @blp_jobs.doc(
+        description="Initiates a background job to generate a comprehensive wiki report. Admin-only, requires $1.00 minimum balance.",
+        summary="Generate a comprehensive wiki report for a project."
     )
-    
-    logger.info(f"[WIKI] Job {job_id} created for project {project_id} by user {user_id}")
-    
-    # 3. Start the background task
-    job_manager.run_async(
-        job_id, 
-        _run_wiki_generation_task, 
-        project_id, 
-        user_id
-    )
-    
-    # 4. Return immediately with 202 Accepted
-    return jsonify({
-        "message": "Wiki generation has started.",
-        "job_id": job_id,
-        "status_url": f"/jobs/{job_id}"
-    }), 202
+    @blp_jobs.response(202, WikiGenerationResponseSchema)
+    def post(self, project_id):
+        """Start a background wiki/report generation job."""
+        auth_data = _get_user_from_request(request)
+        if not auth_data or auth_data['role'] != 'admin':
+            abort(403, message="Only project admins can run reports.")
+        
+        user_id = auth_data['user_id']
+        
+        # 1. Check API pool balance BEFORE starting the job
+        user_balance = get_user_balance(user_id)
+        if user_balance < WIKI_JOB_MIN_BALANCE:
+            logger.warning(f"User {user_id} tried to start wiki job with insufficient balance (${user_balance:.2f}).")
+            abort(402, message=f"Insufficient balance. This report requires a minimum balance of ${WIKI_JOB_MIN_BALANCE:.2f}.")
+        
+        # 2. Create the job "receipt"
+        job_id = job_manager.create_job(
+            project_id=project_id, 
+            user_id=user_id, 
+            job_type="wiki_generation"
+        )
+        
+        logger.info(f"[WIKI] Job {job_id} created for project {project_id} by user {user_id}")
+        
+        # 3. Start the background task
+        job_manager.run_async(
+            job_id, 
+            _run_wiki_generation_task, 
+            project_id, 
+            user_id
+        )
+        
+        # 4. Return immediately with 202 Accepted
+        return {
+            "message": "Wiki generation has started.",
+            "job_id": job_id,
+            "status_url": f"/jobs/{job_id}"
+        }
 
 
 # --- Admin & Monitoring Endpoints ---
 
-@app.route('/admin/costs', methods=['GET'])
-def get_cost_summary():
-    """
-    [ADMIN-ONLY] Gets an aggregate cost summary from all LLM clients.
-    ---
-    tags:
-      - Admin
-    summary: Get aggregate LLM cost summary.
-    description: >
-      Admin-only endpoint that returns a real-time aggregate cost summary
-      across all LLM client instances in the system (Triage, Flash, Pro, Polish).
-      Useful for operational monitoring and cost analysis.
-    security:
-      - BearerAuth: []
-    parameters:
-      - name: Authorization
-        in: header
-        required: true
-        description: 'Bearer <FIREBASE_ID_TOKEN> (must be admin role)'
-        schema:
-          type: string
-    responses:
-      200:
-        description: Cost summary retrieved successfully.
-        schema:
-          id: CostSummary
-          properties:
-            total_tokens:
-              type: integer
-              description: Total tokens processed across all clients.
-            total_cost:
-              type: number
-              description: Total cost in dollars.
-            clients:
-              type: object
-              description: Per-client breakdown of costs.
-              properties:
-                triage_client:
-                  $ref: '#/definitions/ClientCostMetrics'
-                answer_flash_client:
-                  $ref: '#/definitions/ClientCostMetrics'
-                answer_pro_client:
-                  $ref: '#/definitions/ClientCostMetrics'
-                polish_client:
-                  $ref: '#/definitions/ClientCostMetrics'
-      403:
-        description: User must have admin role to access this endpoint.
-    """
-    # 1. AUTHENTICATION (Must be an admin)
-    auth_data = _get_user_from_request(request)
-    if not auth_data or not auth_data['valid'] or auth_data['role'] != 'admin':
-        logging.warning(f"Failed admin cost summary access attempt.")
-        return jsonify({"error": "You do not have permission to access this resource."}), 403
+@blp_admin.route('/costs')
+class AdminCosts(MethodView):
+    """Get aggregate LLM cost summary."""
 
-    # 2. Get Summary from the Aggregator
-    summary = cost_aggregator.get_aggregate_cost()
-    
-    return jsonify(summary)
+    @blp_admin.doc(
+        description="Admin-only endpoint that returns a real-time aggregate cost summary across all LLM client instances.",
+        summary="Get aggregate LLM cost summary."
+    )
+    @blp_admin.response(200, CostSummarySchema)
+    def get(self):
+        """Get aggregate LLM cost summary."""
+        # 1. AUTHENTICATION (Must be an admin)
+        auth_data = _get_user_from_request(request)
+        if not auth_data or not auth_data['valid'] or auth_data['role'] != 'admin':
+            logging.warning(f"Failed admin cost summary access attempt.")
+            abort(403, message="You do not have permission to access this resource.")
+
+        # 2. Get Summary from the Aggregator
+        summary = cost_aggregator.get_aggregate_cost()
+        
+        return summary
 
 
 if __name__ == '__main__':
