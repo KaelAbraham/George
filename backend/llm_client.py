@@ -162,7 +162,12 @@ class GeminiClient:
     def chat(self, prompt: str, history: Optional[List[Dict[str, str]]] = None,
              max_retries: int = 3) -> Dict[str, Any]:
         """
-        Send a chat request and track cost.
+        Send a chat request with optional conversation history and track cost.
+        
+        Args:
+            prompt: The user's message (will be converted to user role)
+            history: Optional list of dicts with 'role' ('user'/'model') and 'content' keys
+            max_retries: Number of retries on API failure
         
         Returns:
             {
@@ -176,7 +181,26 @@ class GeminiClient:
             }
         """
         start_time = time.time()
-        input_tokens = self.count_tokens(prompt)
+        
+        # Build contents list: history + current prompt
+        contents = []
+        
+        if history:
+            # Add historical messages to contents
+            for msg in history:
+                role = msg.get('role', 'user')
+                content = msg.get('content', '')
+                if content:
+                    contents.append(genai.types.Content(role=role, parts=[genai.types.Part(text=content)]))
+        
+        # Add current prompt as user message
+        contents.append(genai.types.Content(role='user', parts=[genai.types.Part(text=prompt)]))
+        
+        # Count tokens for billing (approximate total)
+        total_text = prompt
+        if history:
+            total_text = " ".join([msg.get('content', '') for msg in history]) + " " + prompt
+        input_tokens = self.count_tokens(total_text)
         
         attempt = 0
         response_text = ""
@@ -184,7 +208,7 @@ class GeminiClient:
         while attempt < max_retries:
             try:
                 response = self.client.generate_content(
-                    prompt,
+                    contents,
                     generation_config=genai.types.GenerationConfig(
                         temperature=0.7,
                         top_p=0.9,
