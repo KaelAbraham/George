@@ -1,0 +1,303 @@
+{
+  "openapi": "3.0.2",
+  "info": {
+    "title": "Caudex Pro AI Router",
+    "version": "v1"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:5001",
+      "description": "Backend API Server"
+    }
+  ],
+  "paths": {
+    "/chat": {
+      "post": {
+        "tags": ["chat"],
+        "summary": "Chat endpoint for AI query routing",
+        "operationId": "post_chat",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Chat response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "422": {
+            "description": "Validation error"
+          },
+          "503": {
+            "description": "Service unavailable"
+          }
+        }
+      }
+    },
+    "/jobs/{job_id}": {
+      "get": {
+        "tags": ["jobs"],
+        "summary": "Get job status by ID",
+        "operationId": "get_job_status",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Job not found"
+          }
+        }
+      }
+    },
+    "/project/{project_id}/jobs": {
+      "get": {
+        "tags": ["jobs"],
+        "summary": "Get all jobs for a project",
+        "operationId": "get_project_jobs",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of jobs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobsList"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found"
+          }
+        }
+      }
+    },
+    "/project/{project_id}/generate_wiki": {
+      "post": {
+        "tags": ["jobs"],
+        "summary": "Generate wiki documentation for project",
+        "operationId": "generate_wiki",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Wiki generation accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WikiGenerationResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient permissions"
+          },
+          "404": {
+            "description": "Project not found"
+          }
+        }
+      }
+    },
+    "/admin/costs": {
+      "get": {
+        "tags": ["admin"],
+        "summary": "Get cost summary for all LLM clients",
+        "operationId": "get_admin_costs",
+        "responses": {
+          "200": {
+            "description": "Cost summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CostSummary"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin access required"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ChatRequest": {
+        "type": "object",
+        "required": ["query", "project_id"],
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The user's query"
+          },
+          "project_id": {
+            "type": "string",
+            "description": "The project ID"
+          }
+        }
+      },
+      "ChatResponse": {
+        "type": "object",
+        "properties": {
+          "response": {
+            "type": "string",
+            "description": "The AI response"
+          },
+          "intent": {
+            "type": "string",
+            "description": "Detected intent"
+          },
+          "cost": {
+            "type": "number",
+            "description": "Cost of this request"
+          },
+          "downgraded": {
+            "type": "boolean",
+            "description": "Whether the model was downgraded"
+          },
+          "balance": {
+            "type": "number",
+            "nullable": true,
+            "description": "Remaining balance"
+          }
+        }
+      },
+      "JobStatus": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "running", "completed", "failed"]
+          },
+          "job_type": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "result": {
+            "type": "object",
+            "nullable": true
+          }
+        }
+      },
+      "JobsList": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "type": "string"
+          },
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobStatus"
+            }
+          }
+        }
+      },
+      "WikiGenerationResponse": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "status_url": {
+            "type": "string"
+          }
+        }
+      },
+      "CostSummary": {
+        "type": "object",
+        "properties": {
+          "total_tokens": {
+            "type": "integer"
+          },
+          "total_cost": {
+            "type": "number"
+          },
+          "clients": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "tokens": {
+                  "type": "integer"
+                },
+                "cost": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
