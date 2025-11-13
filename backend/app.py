@@ -12,7 +12,7 @@ from typing import Dict, Any, Optional, List, Tuple
 
 # --- Local Imports ---
 # These are the new foundational services we just planned
-from llm_client import GeminiClient
+from llm_client import GeminiClient, MultiModelCostAggregator
 from session_manager import SessionManager
 from job_manager import JobManager
 # This is your premium report/wiki generator
@@ -41,11 +41,21 @@ WIKI_JOB_MIN_BALANCE = 1.00  # $1.00 minimum balance to start a wiki job
 
 # --- Initialize Clients & Managers ---
 try:
+    # Initialize the aggregator to track all clients
+    cost_aggregator = MultiModelCostAggregator()
+
     # We need multiple clients for the different steps in the 3-call loop
     triage_client = GeminiClient(model="gemini-1.5-flash-latest")
+    cost_aggregator.register_client("triage_client", triage_client)
+    
     answer_client_flash = GeminiClient(model="gemini-1.5-flash-latest")
+    cost_aggregator.register_client("answer_flash_client", answer_client_flash)
+    
     answer_client_pro = GeminiClient(model="gemini-1.5-pro-latest")
+    cost_aggregator.register_client("answer_pro_client", answer_client_pro)
+    
     polish_client = GeminiClient(model="gemini-1.5-flash-latest")
+    cost_aggregator.register_client("polish_client", polish_client)
     
     # Initialize our new foundational services
     session_manager = SessionManager()
@@ -620,6 +630,26 @@ def generate_wiki(project_id):
         "job_id": job_id,
         "status_url": f"/jobs/{job_id}"
     }), 202
+
+
+# --- Admin & Monitoring Endpoints ---
+
+@app.route('/admin/costs', methods=['GET'])
+def get_cost_summary():
+    """
+    [ADMIN-ONLY] Gets an aggregate cost summary from all LLM clients.
+    """
+    # 1. AUTHENTICATION (Must be an admin)
+    auth_data = _get_user_from_request(request)
+    if not auth_data or not auth_data['valid'] or auth_data['role'] != 'admin':
+        logging.warning(f"Failed admin cost summary access attempt.")
+        return jsonify({"error": "You do not have permission to access this resource."}), 403
+
+    # 2. Get Summary from the Aggregator
+    summary = cost_aggregator.get_aggregate_cost()
+    
+    return jsonify(summary)
+
 
 if __name__ == '__main__':
     print("--- Caudex Pro AI Router (The Brain) ---")
