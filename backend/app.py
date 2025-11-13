@@ -9,6 +9,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from typing import Dict, Any, Optional, List, Tuple
+from flasgger import Swagger
 
 # --- Local Imports ---
 # These are the new foundational services we just planned
@@ -22,6 +23,7 @@ from knowledge_extraction.orchestrator import KnowledgeExtractionOrchestrator
 # --- Load Config ---
 load_dotenv()
 app = Flask(__name__)
+swagger = Swagger(app)  # Initialize Swagger for OpenAPI spec generation
 # Make sure data directory exists for job/session dbs
 os.makedirs("data", exist_ok=True) 
 logging.basicConfig(level=logging.INFO)

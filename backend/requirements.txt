@@ -3,6 +3,7 @@
 # Web Framework
 Flask>=3.0.0
 flask-cors>=4.0.0
+flasgger>=0.9.7  # For automatic OpenAPI/Swagger documentation
 
 # Google Gemini API (use latest version for Python 3.14 compatibility)
 google-generativeai>=0.8.0
