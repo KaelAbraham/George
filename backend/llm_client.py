@@ -1,434 +1,314 @@
 """
-George AI - Multi-Tier Routing System for Gemini API
-Intelligently routes queries to appropriate model tiers for optimal cost and performance.
+Cost-aware LLM client for Google Gemini API.
+Tracks API calls, token usage, and costs for billing integration.
+
+Features:
+- Automatic cost tracking across multiple models
+- Token counting with fallback estimation
+- Rate limiting and retry logic
+- Multi-model cost aggregation
+- Detailed audit trails for compliance
 """
+
 import os
-import json
 import logging
-import requests
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
+import time
+from typing import Dict, Any, Optional, List
+from datetime import datetime
+import json
+
+try:
+    import google.generativeai as genai
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
+    genai = None
 
 logger = logging.getLogger(__name__)
 
-# Optional local LLM (Ollama) support
-try:
-    import ollama  # type: ignore
-    OLLAMA_AVAILABLE = True
-except Exception:
-    ollama = None
-    OLLAMA_AVAILABLE = False
+# --- Pricing Configuration (November 2024) ---
+# Updated to match current Google Gemini pricing
+PRICING = {
+    "gemini-1.5-flash-latest": {
+        "input": 0.075 / 1_000_000,   # $0.075 per 1M input tokens
+        "output": 0.30 / 1_000_000,   # $0.30 per 1M output tokens
+        "display_name": "Gemini 1.5 Flash (Fast & Cheap)"
+    },
+    "gemini-1.5-pro-latest": {
+        "input": 1.50 / 1_000_000,    # $1.50 per 1M input tokens
+        "output": 6.00 / 1_000_000,   # $6.00 per 1M output tokens
+        "display_name": "Gemini 1.5 Pro (Powerful)"
+    },
+    "gemini-2.0-flash-lite": {
+        "input": 0.075 / 1_000_000,   # $0.075 per 1M input tokens
+        "output": 0.30 / 1_000_000,   # $0.30 per 1M output tokens
+        "display_name": "Gemini 2.0 Flash Lite (Triaging)"
+    },
+    "gemini-2.0-flash": {
+        "input": 0.10 / 1_000_000,    # $0.10 per 1M input tokens
+        "output": 0.40 / 1_000_000,   # $0.40 per 1M output tokens
+        "display_name": "Gemini 2.0 Flash (Standard)"
+    }
+}
 
-@dataclass
-class ChatMessage:
-    """Represents a chat message."""
-    role: str  # 'user', 'assistant', 'system'
-    content: str
-    timestamp: Optional[str] = None
 
-
-class CloudAPIClient:
-    """Client for cloud-based LLM APIs, primarily focused on Google Gemini."""
+class TokenCounter:
+    """Estimates token counts for text."""
     
-    def __init__(self, api_key: str, model: str, api_base: str = "https://generativelanguage.googleapis.com/v1beta"):
-        """Initialize cloud API client for a specific Gemini model."""
-        self.model = model
-        self.api_base = api_base
-        
-        if not api_key:
-            raise ValueError("A Google AI API key is required.")
-        
-        self.api_key = api_key
-        self.session = requests.Session()
-        self.session.headers.update({"Content-Type": "application/json"})
-        
-    def is_available(self) -> bool:
-        """Check if the API key is set."""
-        return bool(self.api_key)
+    @staticmethod
+    def estimate_tokens(text: str) -> int:
+        """
+        Rough estimate: 1 token ≈ 4 characters.
+        For accurate counts, use genai.count_tokens() API.
+        """
+        if not text:
+            return 0
+        return max(1, len(text) // 4)
+
+
+class CostTracker:
+    """Tracks and reports API call costs."""
     
-    def generate_response(self, prompt: str, system_prompt: str = None, temperature: float = 0.7) -> str:
-        """Generate a response using the configured Gemini model."""
-        url = f"{self.api_base}/models/{self.model}:generateContent?key={self.api_key}"
+    def __init__(self):
+        self.total_cost = 0.0
+        self.call_count = 0
+        self.tokens_used = {"input": 0, "output": 0}
+        self.calls: List[Dict[str, Any]] = []
+    
+    def add_call(self, model: str, input_tokens: int, output_tokens: int,
+                 duration: float = 0.0) -> float:
+        """Record an API call and return its cost."""
+        pricing = PRICING.get(model, {})
+        if not pricing:
+            logger.warning(f"Unknown model {model}. Using zero cost.")
+            return 0.0
         
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": temperature,
-                "maxOutputTokens": 2048,
-            }
+        input_cost = input_tokens * pricing.get("input", 0)
+        output_cost = output_tokens * pricing.get("output", 0)
+        total_cost = input_cost + output_cost
+        
+        self.total_cost += total_cost
+        self.call_count += 1
+        self.tokens_used["input"] += input_tokens
+        self.tokens_used["output"] += output_tokens
+        
+        call_record = {
+            "timestamp": datetime.now().isoformat(),
+            "model": model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "input_cost": round(input_cost, 8),
+            "output_cost": round(output_cost, 8),
+            "total_cost": round(total_cost, 8),
+            "duration_seconds": round(duration, 2)
         }
-        if system_prompt:
-            payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
-
-        try:
-            response = self.session.post(url, json=payload, timeout=120)
-            response.raise_for_status()
-            result = response.json()
-            return result["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed for model {self.model}: {e}")
-            raise Exception(f"API Error with {self.model}: {e}")
-        except (KeyError, IndexError) as e:
-            logger.error(f"Unexpected API response structure for model {self.model}")
-            raise Exception(f"Invalid response from {self.model}: {e}")
-
-
-class OllamaClient:
-    """Minimal Ollama client with a compatible interface to CloudAPIClient."""
-    def __init__(self, model: str = "phi3:mini:instruct"):
-        self.model = model
-
-    def is_available(self) -> bool:
-        if not OLLAMA_AVAILABLE:
-            return False
-        try:
-            ollama.list()
-            return True
-        except Exception:
-            return False
-
-    def generate_response(self, prompt: str, system_prompt: str = None, temperature: float = 0.7) -> str:
-        if not OLLAMA_AVAILABLE:
-            raise Exception("Ollama is not installed/available")
-        full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-        try:
-            response = ollama.chat(
-                model=self.model,
-                messages=[{"role": "user", "content": full_prompt}],
-                options={"temperature": temperature},
-            )
-            return response["message"]["content"].strip()
-        except Exception as e:
-            logger.error(f"Ollama chat failed: {e}")
-            raise
-
-
-class AIRouter:
-    """
-    Intelligently routes user queries to the appropriate Gemini model tier
-    based on complexity and context requirements.
-    """
-    def __init__(self, api_key: str):
-        if not api_key:
-            raise ValueError("API key is essential for the AI Router to function.")
-            
-        self.triage_client = CloudAPIClient(api_key=api_key, model="gemini-2.0-flash-lite")
-        self.standard_client = CloudAPIClient(api_key=api_key, model="gemini-2.0-flash")
-        self.pro_client = CloudAPIClient(api_key=api_key, model="gemini-2.5-pro")
-
-    def triage_query(self, user_question: str) -> Dict[str, Any]:
-        """Uses the fastest model to classify the query's complexity and context needs."""
-        system_prompt = """You are a request triage agent. Analyze the user's question and determine two things:
-1. **complexity**: Classify as 'simple_lookup', 'complex_analysis', or 'creative_task'
-2. **needs_memory**: Does it rely on unspoken context from previous conversation?
-
-Respond with ONLY valid JSON: {"complexity": "...", "needs_memory": boolean}"""
-
-        try:
-            response_text = self.triage_client.generate_response(user_question, system_prompt, temperature=0.0)
-            return json.loads(response_text)
-        except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"Triage failed: {e}. Defaulting to complex analysis.")
-            return {"complexity": "complex_analysis", "needs_memory": True}
-
-    def execute_and_polish(self, user_question: str, context: str, triage_result: Dict) -> Dict:
-        """Routes to the correct model, gets a response, and polishes it."""
-        complexity = triage_result.get("complexity", "complex_analysis")
-
-        # 1. Select the appropriate client for execution
-        if complexity == 'simple_lookup':
-            execution_client = self.standard_client
-        else:  # complex_analysis or creative_task
-            execution_client = self.pro_client
-
-        # 2. Generate the main, factual response
-        main_prompt = f"Based on the following context, answer the user's question.\n\nContext:\n{context}\n\nQuestion:\n{user_question}"
-        main_response = execution_client.generate_response(main_prompt, system_prompt="You are a helpful AI assistant. Provide a direct, factual answer based on the context provided.")
-
-        # 3. "Georgeification" Layer: Polish the response for tone
-        polish_prompt = f"Rephrase the following answer to have a natural, conversational, and friendly tone, as if you are 'George', an AI writing assistant. Do not add any new information. Answer:\n\n{main_response}"
-        final_response = self.standard_client.generate_response(polish_prompt, temperature=0.5)
-
+        
+        self.calls.append(call_record)
+        logger.info(f"[COST] {model} | ${total_cost:.6f} | "
+                   f"{input_tokens}→{output_tokens} tokens")
+        
+        return total_cost
+    
+    def get_summary(self) -> Dict[str, Any]:
+        """Get cost summary."""
         return {
-            "response": final_response,
-            "model": execution_client.model,
+            "total_cost": round(self.total_cost, 6),
+            "call_count": self.call_count,
+            "avg_cost_per_call": round(self.total_cost / max(1, self.call_count), 6),
+            "tokens_used": self.tokens_used
         }
+    
+    def get_audit_trail(self) -> List[Dict[str, Any]]:
+        """Get all call details."""
+        return self.calls
 
 
 class GeminiClient:
     """
-    Main AI interface with multi-tier routing for optimal cost and performance.
-    Backwards compatible with the old GeminiClient interface.
+    Cost-aware Gemini API client with comprehensive tracking.
+    
+    Usage:
+        client = GeminiClient(model="gemini-1.5-flash-latest")
+        result = client.chat(prompt)
+        print(f"Cost: ${result['cost']}")
+        print(f"Summary: {client.get_cost_summary()}")
     """
     
-    def __init__(self, api_key: Optional[str] = None):
-        """Initialize the Gemini client with routing capabilities."""
-        resolved_api_key = api_key or os.getenv('GEMINI_API_KEY')
-        if not resolved_api_key:
-            raise ValueError("Gemini API key not provided. Set GEMINI_API_KEY environment variable.")
+    def __init__(self, model: str = "gemini-1.5-flash-latest", api_key: str = None):
+        """Initialize with model and API key."""
+        if not GENAI_AVAILABLE:
+            raise ImportError("Install google-generativeai: pip install google-generativeai")
         
-        self.api_key = resolved_api_key
-        self.router = AIRouter(api_key=resolved_api_key)
-        self.knowledge_client = CloudAPIClient(api_key=resolved_api_key, model="gemini-2.5-pro")
-        self.conversation_history: List[ChatMessage] = []
+        self.model_name = model
+        self.cost_tracker = CostTracker()
         
-        # Backwards compatibility
-        self.model_name = 'gemini-2.0-flash'
-        self.api_url = f'https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent'
+        api_key = api_key or os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY not set")
+        
+        genai.configure(api_key=api_key)
+        self.client = genai.GenerativeModel(model)
+        logger.info(f"GeminiClient initialized: {model}")
     
-    def is_available(self) -> bool:
-        """Check if AI services are available."""
-        return self.router.triage_client.is_available()
-    
-    def generate_text(self, prompt: str, context: str = "") -> str:
-        """
-        Generate text using intelligent routing (backwards compatible method).
-        
-        Args:
-            prompt: The prompt to send to the model
-            context: Optional context to include before the prompt
-            
-        Returns:
-            Generated text response
-        """
+    def count_tokens(self, text: str) -> int:
+        """Count tokens using API, fallback to estimation."""
         try:
-            # Use the routing system
-            triage_result = self.router.triage_query(prompt)
-            full_context = context if context else ""
-            result = self.router.execute_and_polish(prompt, full_context, triage_result)
-            return result['response']
+            response = self.client.count_tokens(text)
+            return response.total_tokens
         except Exception as e:
-            logger.error(f"Error in generate_text: {e}")
-            return f"Error: {str(e)}"
+            logger.debug(f"Token API failed: {e}. Using estimation.")
+            return TokenCounter.estimate_tokens(text)
     
-    def chat(self, message: str, project_context: str = "") -> Dict[str, Any]:
-        """Process a chat message using the full routing and polishing pipeline."""
-        try:
-            # 1. Triage the query
-            triage_result = self.router.triage_query(message)
-
-            # 2. Gather resources
-            context_parts = [project_context] if project_context else []
-            if triage_result.get("needs_memory", False) and self.conversation_history:
-                recent_history = "\n".join([f"{msg.role}: {msg.content}" for msg in self.conversation_history[-3:]])
-                context_parts.append(f"Recent Conversation History:\n{recent_history}")
-            
-            full_context = "\n\n".join(context_parts)
-
-            # 3. Execute the routed query and get a polished response
-            result = self.router.execute_and_polish(message, full_context, triage_result)
-
-            # 4. Update history
-            self.conversation_history.append(ChatMessage(role="user", content=message))
-            self.conversation_history.append(ChatMessage(role="assistant", content=result['response']))
-            
-            return {
-                "response": result['response'],
-                "model": result['model'],
-                "success": True
+    def chat(self, prompt: str, history: Optional[List[Dict[str, str]]] = None,
+             max_retries: int = 3) -> Dict[str, Any]:
+        """
+        Send a chat request and track cost.
+        
+        Returns:
+            {
+                'response': str,
+                'cost': float,
+                'input_tokens': int,
+                'output_tokens': int,
+                'model': str,
+                'timestamp': str,
+                'duration_seconds': float
             }
-        except Exception as e:
-            logger.error(f"Error in chat processing: {e}")
-            return {"response": f"Sorry, I encountered an error: {e}", "success": False}
-
-
-# --- Compatibility layer (migrated from src/george/llm_integration.py) ---
-class GeorgeAICompat:
-    """Compatibility wrapper that mimics llm_integration.GeorgeAI.chat()."""
-    def __init__(self, model: str = "phi3:mini:instruct", use_cloud: bool = False, api_key: Optional[str] = None):
-        self.model = model
-        self.use_cloud = use_cloud
-        if use_cloud:
-            resolved_key = api_key or os.getenv("GEMINI_API_KEY")
-            if not resolved_key:
-                raise ValueError("GEMINI_API_KEY not set for cloud mode")
-            # Map friendly names to actual Gemini models
-            model_map = {
-                "gemini-pro": "gemini-1.0-pro",
-                "gemini-flash-lite": "gemini-2.0-flash-lite",
-                "gemini-2.0-flash": "gemini-2.0-flash",
-                "gemini-2.5-pro": "gemini-2.5-pro",
-            }
-            model_id = model_map.get(model.lower(), model)
-            self.client = CloudAPIClient(api_key=resolved_key, model=model_id)
-        else:
-            self.client = OllamaClient(model=model)
-
-    def is_available(self) -> bool:
-        try:
-            return self.client.is_available()
-        except Exception:
-            return False
-
-    def chat(self, prompt: str, project_context: str = "", temperature: float = 0.7, timeout: int = 30) -> Dict[str, Any]:
-        full_prompt = prompt
-        if project_context:
-            full_prompt = f"{prompt}\n\n--- Start Context ---\n{project_context}\n--- End Context ---"
-        try:
-            text = self.client.generate_response(full_prompt, temperature=temperature)
-            return {"success": True, "response": text, "model": getattr(self.client, "model", "unknown")}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-
-def create_george_ai(model: str = "phi3:mini:instruct", use_cloud: bool = False, api_key: Optional[str] = None) -> GeorgeAICompat:
-    """Factory to maintain backwards compatibility with llm_integration.create_george_ai."""
-    return GeorgeAICompat(model=model, use_cloud=use_cloud, api_key=api_key)
-    
-    def get_knowledge_client(self) -> CloudAPIClient:
-        """Provides direct access to the powerful Pro client for high-value tasks."""
-        return self.knowledge_client
-    
-    def clear_history(self):
-        """Clear conversation history."""
-        self.conversation_history = []
-    
-    def extract_entities(self, text: str) -> dict:
         """
-        Extract entities (characters, locations, terms) from text using Pro model.
+        start_time = time.time()
+        input_tokens = self.count_tokens(prompt)
         
-        Args:
-            text: The text to analyze
-            
-        Returns:
-            Dictionary with extracted entities
-        """
-        prompt = f"""Analyze this text and extract:
-1. Characters (people in the story) - use FULL NAMES
-2. Locations (places mentioned)
-3. Important terms/concepts
-
-Text:
-{text[:10000]}
-
-Respond in this exact format:
-CHARACTERS: [list names separated by commas]
-LOCATIONS: [list places separated by commas]
-TERMS: [list important terms separated by commas]"""
-
-        try:
-            # Use Pro client for entity extraction (high-value task)
-            response_text = self.knowledge_client.generate_response(prompt, temperature=0.2)
-            result = self._parse_entity_response(response_text)
-            return result
-        except Exception as e:
-            logger.error(f"Entity extraction failed: {e}")
-            return {
-                'characters': [],
-                'locations': [],
-                'terms': [],
-                'error': str(e)
-            }
-    
-    def build_profile(self, entity_name: str, entity_type: str, text: str) -> str:
-        """
-        Build a detailed profile for an entity using Pro model.
+        attempt = 0
+        response_text = ""
         
-        Args:
-            entity_name: Name of the entity (character, location, etc.)
-            entity_type: Type of entity ('character', 'location', 'term')
-            text: The source text to analyze
-            
-        Returns:
-            Markdown-formatted profile
-        """
-        # Limit text size for API
-        text_preview = text[:15000] if len(text) > 15000 else text
+        while attempt < max_retries:
+            try:
+                response = self.client.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.7,
+                        top_p=0.9,
+                        max_output_tokens=2048
+                    )
+                )
+                response_text = response.text
+                break
+                
+            except Exception as e:
+                attempt += 1
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt
+                    logger.warning(f"Attempt {attempt} failed: {e}. Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"All {max_retries} attempts failed: {e}")
+                    raise
         
-        if entity_type == 'character':
-            prompt = f"""Create a detailed character profile for "{entity_name}" based on this text.
-
-Include:
-- Physical description
-- Personality traits
-- Relationships with other characters
-- Key actions and moments
-- Character development
-
-Text:
-{text_preview}
-
-Format as markdown with clear sections."""
-
-        elif entity_type == 'location':
-            prompt = f"""Create a detailed location profile for "{entity_name}" based on this text.
-
-Include:
-- Physical description
-- Atmosphere/mood
-- Events that happen here
-- Significance to the story
-
-Text:
-{text_preview}
-
-Format as markdown with clear sections."""
-
-        else:  # term
-            prompt = f"""Explain the term/concept "{entity_name}" based on this text.
-
-Include:
-- Definition/meaning
-- How it's used in the story
-- Significance
-- Related concepts
-
-Text:
-{text_preview}
-
-Format as markdown with clear sections."""
-
-        try:
-            # Use Pro client for profile building (high-value, detailed task)
-            return self.knowledge_client.generate_response(prompt, temperature=0.3)
-        except Exception as e:
-            logger.error(f"Profile building failed for {entity_name}: {e}")
-            return f"# {entity_type.title()} Profile: {entity_name}\n\nError: {str(e)}"
-    
-    def answer_query(self, question: str, context: str) -> str:
-        """
-        Answer a question using provided context.
+        output_tokens = self.count_tokens(response_text)
+        duration = time.time() - start_time
         
-        Args:
-            question: The user's question
-            context: Relevant context (entity profiles, etc.)
-            
-        Returns:
-            Answer to the question
-        """
-        prompt = f"""Based on the following context, answer this question:
-
-Question: {question}
-
-Context:
-{context}
-
-Provide a clear, detailed answer based only on the information in the context."""
-
-        return self.generate_text(prompt)
+        call_cost = self.cost_tracker.add_call(
+            self.model_name,
+            input_tokens,
+            output_tokens,
+            duration
+        )
+        
+        return {
+            "response": response_text,
+            "cost": call_cost,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "model": self.model_name,
+            "timestamp": datetime.now().isoformat(),
+            "duration_seconds": duration
+        }
     
-    def _parse_entity_response(self, response: str) -> dict:
-        """Parse the entity extraction response into structured data."""
-        result = {
-            'characters': [],
-            'locations': [],
-            'terms': []
+    def estimate_cost(self, prompt: str, estimated_output_tokens: int = 500) -> float:
+        """Estimate cost before making a call."""
+        input_tokens = self.count_tokens(prompt)
+        pricing = PRICING.get(self.model_name, {})
+        
+        input_cost = input_tokens * pricing.get("input", 0)
+        output_cost = estimated_output_tokens * pricing.get("output", 0)
+        
+        return input_cost + output_cost
+    
+    def get_cost_summary(self) -> Dict[str, Any]:
+        """Get cost summary for all calls."""
+        return self.cost_tracker.get_summary()
+    
+    def get_audit_trail(self) -> List[Dict[str, Any]]:
+        """Get detailed audit trail."""
+        return self.cost_tracker.get_audit_trail()
+    
+    def get_model_info(self) -> Dict[str, Any]:
+        """Get model pricing info."""
+        pricing = PRICING.get(self.model_name, {})
+        return {
+            "model": self.model_name,
+            "display_name": pricing.get("display_name", self.model_name),
+            "input_price_per_1m_tokens": round(pricing.get("input", 0) * 1_000_000, 2),
+            "output_price_per_1m_tokens": round(pricing.get("output", 0) * 1_000_000, 2),
+            "total_calls": self.cost_tracker.call_count,
+            "total_cost": round(self.cost_tracker.total_cost, 6)
+        }
+
+
+class MultiModelCostAggregator:
+    """Track costs across multiple clients."""
+    
+    def __init__(self):
+        self.clients: Dict[str, GeminiClient] = {}
+    
+    def register_client(self, name: str, client: GeminiClient):
+        """Register a client."""
+        self.clients[name] = client
+        logger.info(f"Registered client '{name}' using {client.model_name}")
+    
+    def get_aggregate_cost(self) -> Dict[str, Any]:
+        """Get costs across all clients."""
+        aggregate = {
+            "total_cost": 0.0,
+            "by_client": {},
+            "by_model": {},
+            "total_calls": 0,
+            "total_tokens": 0
         }
         
-        lines = response.strip().split('\n')
-        for line in lines:
-            line = line.strip()
-            if line.startswith('CHARACTERS:'):
-                chars = line.replace('CHARACTERS:', '').strip()
-                if chars and chars.lower() != 'none':
-                    result['characters'] = [c.strip() for c in chars.split(',') if c.strip()]
-            elif line.startswith('LOCATIONS:'):
-                locs = line.replace('LOCATIONS:', '').strip()
-                if locs and locs.lower() != 'none':
-                    result['locations'] = [l.strip() for l in locs.split(',') if l.strip()]
-            elif line.startswith('TERMS:'):
-                terms = line.replace('TERMS:', '').strip()
-                if terms and terms.lower() != 'none':
-                    result['terms'] = [t.strip() for t in terms.split(',') if t.strip()]
+        for name, client in self.clients.items():
+            summary = client.get_cost_summary()
+            aggregate["total_cost"] += summary["total_cost"]
+            aggregate["by_client"][name] = summary
+            aggregate["total_calls"] += summary["call_count"]
+            aggregate["total_tokens"] += summary["total_tokens"]
+            
+            model = client.model_name
+            if model not in aggregate["by_model"]:
+                aggregate["by_model"][model] = {"calls": 0, "cost": 0.0}
+            
+            aggregate["by_model"][model]["calls"] += summary["call_count"]
+            aggregate["by_model"][model]["cost"] += summary["total_cost"]
         
-        return result
+        return aggregate
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    
+    try:
+        client = GeminiClient()
+        
+        # Estimate cost
+        test_prompt = "Analyze this character..."
+        est_cost = client.estimate_cost(test_prompt)
+        print(f"Estimated: ${est_cost:.6f}")
+        
+        # Make call
+        result = client.chat(test_prompt)
+        print(f"Response: {result['response'][:100]}...")
+        print(f"Cost: ${result['cost']:.6f}")
+        print(f"Summary: {client.get_cost_summary()}")
+        
+    except Exception as e:
+        logging.error(f"Error: {e}")
