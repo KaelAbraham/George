@@ -35,6 +35,7 @@ GIT_SERVER_URL = os.environ.get("GIT_SERVER_URL", "http://localhost:5003")
 
 # --- Constants ---
 PRO_MODEL_THRESHOLD = 0.50  # 50 cents minimum balance to use Pro model
+WIKI_JOB_MIN_BALANCE = 1.00  # $1.00 minimum balance to start a wiki job
 
 # --- Initialize Clients & Managers ---
 try:
@@ -48,7 +49,7 @@ try:
     session_manager = SessionManager()
     job_manager = JobManager()
     
-    # orchestrator = KnowledgeExtractionOrchestrator() # Ready for premium jobs
+    orchestrator = KnowledgeExtractionOrchestrator()  # Ready for premium jobs
     
     logging.info("AI Router initialized successfully.")
 except Exception as e:
@@ -360,19 +361,99 @@ def get_project_jobs(project_id):
     
     return jsonify({"project_id": project_id, "jobs": jobs})
 
-# --- EXAMPLE: Async "Wiki Generation" Endpoint ---
+# --- WIKI Generation Task ---
 def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
-    """The actual heavy-lifting for the wiki job."""
-    logging.info(f"Starting WIKI job for {project_id}")
-    # 1. Get all chunks from chroma_server
-    # 2. Get graph data from chroma_server
-    # 3. Call KnowledgeExtractionOrchestrator
-    # 4. Save files using filesystem_server
-    # 5. Snapshot with git_server
-    import time
-    time.sleep(10) # Simulate 10 seconds of work
-    logging.info(f"Finished WIKI job for {project_id}")
-    return {"files_created": 15, "entities_found": 42}
+    """
+    The actual heavy-lifting for the wiki job.
+    
+    Steps:
+    1. Get all chunks from chroma_server
+    2. Call KnowledgeExtractionOrchestrator to generate wiki files
+    3. Save files using filesystem_server
+    4. Create Git snapshot
+    """
+    logging.info(f"[WIKI] Starting wiki generation for project {project_id}")
+    collection_name = f"project_{project_id}"
+
+    # Step 1: Get all chunks from chroma_server
+    logging.info(f"[WIKI] Step 1: Fetching all documents from {collection_name}...")
+    try:
+        resp = requests.post(
+            f"{CHROMA_SERVER_URL}/get_all_data",
+            json={"collection_name": collection_name},
+            timeout=30
+        )
+        resp.raise_for_status()
+        all_docs = resp.json().get('documents', [])
+        if not all_docs:
+            raise Exception("No documents found in knowledge base.")
+        logging.info(f"[WIKI] Step 1 SUCCESS: Retrieved {len(all_docs)} documents.")
+    except Exception as e:
+        logging.error(f"[WIKI] Step 1 FAILED: {e}")
+        raise Exception(f"Failed to fetch knowledge base data: {e}")
+
+    # Step 2: Call KnowledgeExtractionOrchestrator
+    logging.info(f"[WIKI] Step 2: Calling orchestrator to generate wiki files...")
+    try:
+        # Orchestrator generates markdown files from documents
+        generated_files = orchestrator.generate_wiki_files(all_docs)
+        if not generated_files:
+            raise Exception("Orchestrator returned no files.")
+        logging.info(f"[WIKI] Step 2 SUCCESS: Generated {len(generated_files)} files.")
+    except Exception as e:
+        logging.error(f"[WIKI] Step 2 FAILED: {e}")
+        raise Exception(f"Failed to generate wiki files: {e}")
+
+    # Step 3: Save files using filesystem_server
+    logging.info(f"[WIKI] Step 3: Saving files via filesystem_server...")
+    saved_count = 0
+    try:
+        for file_data in generated_files:
+            save_payload = {
+                "project_id": project_id,
+                "user_id": user_id,
+                "file_path": f"wiki/{file_data.get('filename', 'unknown.md')}",
+                "content": file_data.get('content', '')
+            }
+            save_resp = requests.post(
+                f"{FILESYSTEM_SERVER_URL}/save_file",
+                json=save_payload,
+                timeout=10
+            )
+            if save_resp.status_code == 200:
+                saved_count += 1
+                logging.debug(f"[WIKI] Saved {file_data.get('filename', 'unknown')}")
+        
+        logging.info(f"[WIKI] Step 3 SUCCESS: Saved {saved_count}/{len(generated_files)} files.")
+    except Exception as e:
+        logging.error(f"[WIKI] Step 3 FAILED: {e}")
+        raise Exception(f"Failed to save generated files: {e}")
+
+    # Step 4: Create Git snapshot
+    logging.info(f"[WIKI] Step 4: Creating Git snapshot...")
+    try:
+        git_resp = requests.post(
+            f"{GIT_SERVER_URL}/snapshot/{project_id}",
+            json={
+                "user_id": user_id,
+                "message": f"Auto-generated wiki with {saved_count} files."
+            },
+            timeout=15
+        )
+        git_resp.raise_for_status()
+        snapshot_id = git_resp.json().get('snapshot_id', 'N/A')
+        logging.info(f"[WIKI] Step 4 SUCCESS: Snapshot created: {snapshot_id}")
+    except Exception as e:
+        # This step failing is not critical; we log but don't fail the whole job
+        logging.warning(f"[WIKI] Step 4 WARNING: Git snapshot failed: {e}. Continuing.")
+
+    # Success!
+    logging.info(f"[WIKI] Wiki generation completed for project {project_id}")
+    return {
+        "files_created": saved_count,
+        "entities_processed": len(generated_files),
+        "message": f"Successfully generated and saved {saved_count} wiki files."
+    }
 
 
 @app.route('/project/<project_id>/generate_wiki', methods=['POST'])
@@ -383,16 +464,26 @@ def generate_wiki(project_id):
     
     user_id = auth_data['user_id']
     
-    # TODO: Check API pool balance before starting!
+    # 1. Check API pool balance BEFORE starting the job
+    user_balance = get_user_balance(user_id)
+    if user_balance < WIKI_JOB_MIN_BALANCE:
+        logger.warning(f"User {user_id} tried to start wiki job with insufficient balance (${user_balance:.2f}).")
+        return jsonify({
+            "error": f"Insufficient balance. This report requires a minimum balance of ${WIKI_JOB_MIN_BALANCE:.2f}.",
+            "balance_required": WIKI_JOB_MIN_BALANCE,
+            "balance_current": round(user_balance, 2)
+        }), 402  # 402 Payment Required
     
-    # 1. Create the job "receipt"
+    # 2. Create the job "receipt"
     job_id = job_manager.create_job(
         project_id=project_id, 
         user_id=user_id, 
         job_type="wiki_generation"
     )
     
-    # 2. Start the background task
+    logger.info(f"[WIKI] Job {job_id} created for project {project_id} by user {user_id}")
+    
+    # 3. Start the background task
     job_manager.run_async(
         job_id, 
         _run_wiki_generation_task, 
@@ -400,12 +491,12 @@ def generate_wiki(project_id):
         user_id
     )
     
-    # 3. Return immediately
+    # 4. Return immediately with 202 Accepted
     return jsonify({
         "message": "Wiki generation has started.",
         "job_id": job_id,
         "status_url": f"/jobs/{job_id}"
-    }), 202 # "Accepted"
+    }), 202
 
 if __name__ == '__main__':
     print("--- Caudex Pro AI Router (The Brain) ---")
