@@ -36,6 +36,35 @@ app.config["OPENAPI_SWAGGER_UI_VERSION"] = "3.10.0"
 
 api = Api(app)  # Initialize flask-smorest for advanced API documentation
 
+# --- Flask-Smorest Blueprints ---
+from flask_smorest import Blueprint
+
+blp_chat = Blueprint(
+    "chat",
+    __name__,
+    url_prefix="/",
+    description="AI chat and query routing endpoints"
+)
+
+blp_jobs = Blueprint(
+    "jobs",
+    __name__,
+    url_prefix="/",
+    description="Background job management and tracking"
+)
+
+blp_admin = Blueprint(
+    "admin",
+    __name__,
+    url_prefix="/admin",
+    description="Admin-only monitoring and statistics endpoints"
+)
+
+# Register blueprints with the API
+api.register_blueprint(blp_chat)
+api.register_blueprint(blp_jobs)
+api.register_blueprint(blp_admin)
+
 # Make sure data directory exists for job/session dbs
 os.makedirs("data", exist_ok=True) 
 logging.basicConfig(level=logging.INFO)
@@ -159,6 +188,52 @@ GEORGE_CONSTITUTION = load_prompt('george_operational_protocol.txt')
 AI_ROUTER_PROMPT_v4 = load_prompt('ai_router_v4.txt') 
 COREF_RESOLUTION_PROMPT = load_prompt('coreference_resolution.txt')
 POLISH_PROMPT = load_prompt('george_polish.txt')
+
+# --- Marshmallow Schemas for Request/Response Validation ---
+import marshmallow as ma
+
+class ChatRequestSchema(ma.Schema):
+    """Request schema for POST /chat endpoint."""
+    query = ma.fields.Str(required=True, description="The user's query text.")
+    project_id = ma.fields.Str(required=True, description="The unique project ID.")
+
+class ChatResponseSchema(ma.Schema):
+    """Response schema for successful chat responses."""
+    response = ma.fields.Str(description="The AI's final, polished answer.")
+    intent = ma.fields.Str(description="The intent classification from the AI router.")
+    cost = ma.fields.Float(description="The cost deducted for this specific call.")
+    downgraded = ma.fields.Bool(description="True if Pro model was downgraded to Flash due to low balance.")
+    balance = ma.fields.Float(allow_none=True, description="The user's new balance after the transaction (null if billing server fails).")
+
+class JobStatusSchema(ma.Schema):
+    """Schema for job status response."""
+    job_id = ma.fields.Str(description="The unique job ID.")
+    project_id = ma.fields.Str(description="The project ID associated with the job.")
+    user_id = ma.fields.Str(description="The user who created the job.")
+    status = ma.fields.Str(description="Current job status (PENDING, IN_PROGRESS, COMPLETED, FAILED).")
+    job_type = ma.fields.Str(description="The type of job.")
+    created_at = ma.fields.DateTime(description="When the job was created.")
+    result = ma.fields.Raw(allow_none=True, description="Job result when COMPLETED.")
+
+class JobsListSchema(ma.Schema):
+    """Schema for list of jobs."""
+    jobs = ma.fields.List(ma.fields.Nested(JobStatusSchema), description="List of jobs.")
+
+class CostSummarySchema(ma.Schema):
+    """Schema for admin cost summary."""
+    total_tokens = ma.fields.Int(description="Total tokens processed across all clients.")
+    total_cost = ma.fields.Float(description="Total cost in dollars.")
+    clients = ma.fields.Raw(description="Per-client breakdown of costs.")
+
+class WikiGenerationRequestSchema(ma.Schema):
+    """Request schema for wiki generation (empty body, admin-only)."""
+    pass
+
+class WikiGenerationResponseSchema(ma.Schema):
+    """Response schema for wiki generation job creation."""
+    message = ma.fields.Str(description="Success message.")
+    job_id = ma.fields.Str(description="The job ID to track progress.")
+    status_url = ma.fields.Str(description="The endpoint to check job status.")
 
 # --- Helper Functions ---
 
@@ -307,6 +382,17 @@ def get_chroma_context(query: str, collection_name: str) -> Tuple[Optional[str],
         return None, False  # Failure
 
 # --- Core Chat Endpoint ---
+
+# NOTE: The /chat endpoint below is currently using @app.route with flasgger documentation.
+# Flask-smorest integration (blp_chat.route, MethodView) is prepared via blueprints (blp_chat, blp_jobs, blp_admin)
+# and Marshmallow schemas (ChatRequestSchema, ChatResponseSchema, etc.) defined above.
+# 
+# Migration Path:
+# 1. Test the new Marshmallow schemas by using them in @blp_chat.route endpoints
+# 2. Gradually convert existing @app.route endpoints to @blp_*.route with proper schema decoration
+# 3. End state: All endpoints use flask-smorest for automatic validation and unified OpenAPI docs
+#
+# For now, we keep existing endpoints working while adding flask-smorest infrastructure.
 
 @app.route('/chat', methods=['POST'])
 def chat():
