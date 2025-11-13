@@ -9,7 +9,6 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from typing import Dict, Any, Optional, List, Tuple
-from flasgger import Swagger
 from flask_smorest import Api
 
 # --- Local Imports ---
@@ -24,7 +23,6 @@ from knowledge_extraction.orchestrator import KnowledgeExtractionOrchestrator
 # --- Load Config ---
 load_dotenv()
 app = Flask(__name__)
-swagger = Swagger(app)  # Initialize Swagger for OpenAPI spec generation
 
 # --- Configuration for flask-smorest API documentation ---
 app.config["API_TITLE"] = "Caudex Pro AI Router"
