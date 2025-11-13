@@ -3,7 +3,9 @@ import requests
 import logging
 import json
 import uuid
+import sqlite3
 from pathlib import Path
+from datetime import datetime
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from typing import Dict, Any, Optional, List, Tuple
@@ -66,6 +68,67 @@ def load_prompt(filename: str) -> str:
     except FileNotFoundError:
         logging.error(f"CRITICAL: Prompt file '{filename}' not found.")
         return ""
+
+
+# --- Failed Transaction Logger (Billing Resilience) ---
+class FailedTransactionLogger:
+    """
+    Manages a persistent queue of failed billing deductions.
+    Ensures no charges are lost if the billing server is down or unreachable.
+    
+    The reconciliation service will periodically read from this DB and retry.
+    """
+    def __init__(self, db_path: str = "data/failed_transactions.db"):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+
+    def _get_conn(self) -> sqlite3.Connection:
+        """Helper to get a new SQLite connection."""
+        return sqlite3.connect(str(self.db_path))
+
+    def _init_db(self):
+        """Creates the 'failed_transactions' table if it doesn't exist."""
+        try:
+            with self._get_conn() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS failed_transactions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id TEXT NOT NULL,
+                        job_id TEXT,
+                        cost REAL NOT NULL,
+                        description TEXT,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        status TEXT DEFAULT 'PENDING'
+                    )
+                """)
+                # Index for faster lookup during reconciliation
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_failed_tx_status ON failed_transactions (status)")
+                conn.commit()
+            logging.info("FailedTransactionLogger initialized successfully.")
+        except Exception as e:
+            logging.critical(f"Failed to initialize FailedTransactionLogger database: {e}", exc_info=True)
+            raise
+
+    def log_failure(self, user_id: str, job_id: str, cost: float, description: str):
+        """Logs a failed deduction to the database for later reconciliation."""
+        try:
+            with self._get_conn() as conn:
+                conn.execute(
+                    "INSERT INTO failed_transactions (user_id, job_id, cost, description) VALUES (?, ?, ?, ?)",
+                    (user_id, job_id, cost, description)
+                )
+                conn.commit()
+            logging.info(f"[FAILED-TX] Logged failed transaction for user {user_id}, cost ${cost:.6f}.")
+        except Exception as e:
+            # This is a critical error, as we are failing to log a failure
+            logging.critical(f"!!! CRITICAL: FAILED TO LOG FAILED TRANSACTION: {e}", exc_info=True)
+            # Note: We log but don't raise, to prevent blocking the user
+
+
+# --- Initialize Failed Transaction Logger (global) ---
+failed_tx_logger = FailedTransactionLogger()  # For billing reconciliation on service failures
+
 
 # Load all critical prompts on startup
 GEORGE_CONSTITUTION = load_prompt('george_operational_protocol.txt')
@@ -133,14 +196,17 @@ def get_user_balance(user_id: str) -> Optional[float]:
 def deduct_cost(user_id: str, job_id: str, cost: float, description: str):
     """Tells the billing server to log a transaction and deduct cost."""
     try:
-        requests.post(f"{BILLING_SERVER_URL}/deduct", json={
+        resp = requests.post(f"{BILLING_SERVER_URL}/deduct", json={
             "user_id": user_id,
             "cost": cost,
             "job_id": job_id,
             "description": description
-        })
+        }, timeout=2.0)
+        if resp.status_code != 200:
+            raise Exception(f"Billing server returned {resp.status_code}")
     except Exception as e:
-        logging.error(f"Failed to deduct cost for {user_id}: {e}")
+        logging.error(f"Failed to deduct cost for {user_id}: {e}. Logging for reconciliation.")
+        failed_tx_logger.log_failure(user_id, job_id, cost, description)
 
 def get_triage_data(user_query: str, project_id: str) -> Dict[str, Any]:
     """Call 1: Triage. Determines intent, knowledge source, and memory needs."""
@@ -155,7 +221,7 @@ def get_triage_data(user_query: str, project_id: str) -> Dict[str, Any]:
         # Fallback to a safe, known state
         return {"intent": "app_support", "knowledge_source": "CAUDEX_SUPPORT_KB", "requires_memory": False}
 
-def resolve_memory(triage_data: Dict, user_id: str, project_id: str) -> (str, str, List[Dict]):
+def resolve_memory(triage_data: Dict, user_id: str, project_id: str) -> Tuple[str, str, List[Dict]]:
     """
     Handles Step 1.5 (Memory & Rewrite).
     Returns: (rewritten_query, chat_history_for_prompt, chat_history_for_llm)
