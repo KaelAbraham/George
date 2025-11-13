@@ -10,6 +10,7 @@ from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from typing import Dict, Any, Optional, List, Tuple
 from flasgger import Swagger
+from flask_smorest import Api
 
 # --- Local Imports ---
 # These are the new foundational services we just planned
@@ -24,6 +25,17 @@ from knowledge_extraction.orchestrator import KnowledgeExtractionOrchestrator
 load_dotenv()
 app = Flask(__name__)
 swagger = Swagger(app)  # Initialize Swagger for OpenAPI spec generation
+
+# --- Configuration for flask-smorest API documentation ---
+app.config["API_TITLE"] = "Caudex Pro AI Router"
+app.config["API_VERSION"] = "v1"
+app.config["OPENAPI_VERSION"] = "3.0.2"
+app.config["OPENAPI_URL_PREFIX"] = "/"
+app.config["OPENAPI_SWAGGER_UI_PATH"] = "/api/docs"
+app.config["OPENAPI_SWAGGER_UI_VERSION"] = "3.10.0"
+
+api = Api(app)  # Initialize flask-smorest for advanced API documentation
+
 # Make sure data directory exists for job/session dbs
 os.makedirs("data", exist_ok=True) 
 logging.basicConfig(level=logging.INFO)
