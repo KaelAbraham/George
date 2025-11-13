@@ -1,0 +1,10 @@
+Task: Rewrite the "Latest User Query" to be a standalone, unambiguous question by resolving any pronouns or references using the "Conversation History".
+If the query is already standalone, repeat it exactly as is.
+DO NOT answer the query. ONLY rewrite it.
+
+Conversation History:
+{chat_history}
+
+Latest User Query: {user_query}
+
+Rewritten Standalone Query:

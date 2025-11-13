@@ -12,3 +12,4 @@ markdown        # For .md
 # NEW parsers to add
 PyMuPDF         # For .pdf
 odtpy           # For .odt
+beautifulsoup4  # For HTML/XML parsing

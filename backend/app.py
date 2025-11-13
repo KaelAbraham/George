@@ -1,217 +1,177 @@
-"""
-George Backend - AI Router with Cost Governor & Graceful Degradation
-Intelligent routing with cost awareness, role-based access, and smart model selection.
-"""
 import os
 import requests
 import logging
 import json
 import uuid
-from typing import Dict, Any, Optional, Tuple
 from pathlib import Path
-from dotenv import load_dotenv
 from flask import Flask, request, jsonify
-from flask_cors import CORS
+from dotenv import load_dotenv
+from typing import Dict, Any, Optional, List
 
-# Add the 'src' directory to the Python path
-project_root = Path(__file__).parent.parent
-src_path = project_root / 'src'
-backend_path = project_root / 'backend'
-import sys
-sys.path.insert(0, str(src_path))
-sys.path.insert(0, str(backend_path))
-
-# Import local modules
+# --- Local Imports ---
+# These are the new foundational services we just planned
 from llm_client import GeminiClient
-from job_manager import JobManager
 from session_manager import SessionManager
+from job_manager import JobManager
+# This is your premium report/wiki generator
+from knowledge_extraction.orchestrator import KnowledgeExtractionOrchestrator
 
-# Load environment variables from project root
-load_dotenv(dotenv_path=project_root / '.env')
 
-# Configure logging
+# --- Load Config ---
+load_dotenv()
+app = Flask(__name__)
+# Make sure data directory exists for job/session dbs
+os.makedirs("data", exist_ok=True) 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize global JobManager instance
-job_manager = JobManager(db_path="data/jobs.db")
-
-# Initialize Flask app
-app = Flask(__name__)
-CORS(app)
-
-# --- Service URLs ---
+# --- Service URLs (The "Hands") ---
 AUTH_SERVER_URL = os.environ.get("AUTH_SERVER_URL", "http://localhost:5005")
 BILLING_SERVER_URL = os.environ.get("BILLING_SERVER_URL", "http://localhost:5004")
 CHROMA_SERVER_URL = os.environ.get("CHROMA_SERVER_URL", "http://localhost:5002")
+FILESYSTEM_SERVER_URL = os.environ.get("FILESYSTEM_SERVER_URL", "http://localhost:5001")
+GIT_SERVER_URL = os.environ.get("GIT_SERVER_URL", "http://localhost:5003")
+
 
 # --- Constants ---
 PRO_MODEL_THRESHOLD = 0.50  # 50 cents minimum balance to use Pro model
-FLASH_MODEL = "gemini-1.5-flash-latest"
-PRO_MODEL = "gemini-1.5-pro-latest"
 
 # --- Initialize Clients & Managers ---
 try:
-    # Multiple clients for different routing tiers
-    triage_client = GeminiClient(model=FLASH_MODEL)
-    answer_client_flash = GeminiClient(model=FLASH_MODEL)
-    answer_client_pro = GeminiClient(model=PRO_MODEL)
-    polish_client = GeminiClient(model=FLASH_MODEL)
+    # We need multiple clients for the different steps in the 3-call loop
+    triage_client = GeminiClient(model="gemini-1.5-flash-latest")
+    answer_client_flash = GeminiClient(model="gemini-1.5-flash-latest")
+    answer_client_pro = GeminiClient(model="gemini-1.5-pro-latest")
+    polish_client = GeminiClient(model="gemini-1.5-flash-latest")
     
+    # Initialize our new foundational services
     session_manager = SessionManager()
+    job_manager = JobManager()
     
-    logger.info("✅ All AI clients initialized successfully.")
+    # orchestrator = KnowledgeExtractionOrchestrator() # Ready for premium jobs
+    
+    logging.info("AI Router initialized successfully.")
 except Exception as e:
-    logger.critical(f"❌ Failed to initialize clients: {e}", exc_info=True)
+    logging.critical(f"Failed to initialize clients: {e}", exc_info=True)
+    # In a real app, you'd exit here if core clients fail
+    
+# --- Prompt Loading (Helper) ---
+PROMPT_DIR = Path("prompts")
+def load_prompt(filename: str) -> str:
+    """Loads a prompt from the backend/prompts/ directory."""
+    try:
+        with open(PROMPT_DIR / filename, 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        logging.error(f"CRITICAL: Prompt file '{filename}' not found.")
+        return ""
 
-# --- Prompt Templates ---
-GEORGE_CONSTITUTION = """You are George, a sophisticated writing support agent.
-Your role is to help writers through diagnostic analysis, not co-writing.
-Be insightful, encouraging, and grounded in the text provided."""
-
-AI_ROUTER_PROMPT_v4 = """Analyze this user query and respond with valid JSON only:
-{
-    "intent": "craft_support" | "creative_task" | "emotional_support" | "complex_analysis",
-    "knowledge_source": "PROJECT_KB" | "CAUDEX_SUPPORT_KB" | "NONE",
-    "requires_memory": true | false,
-    "explanation": "brief reasoning"
-}
-
-User Query: {user_query}
-Project ID: {project_id}"""
-
-COREF_RESOLUTION_PROMPT = """Rewrite the user query for clarity, resolving pronouns and implicit references.
-Keep the rewritten query concise and self-contained.
-
-Chat History:
-{chat_history}
-
-Original Query: {user_query}
-
-Rewritten Query:"""
-
-POLISH_PROMPT_TEMPLATE = """You are George, a warm and insightful writing support agent.
-Rephrase the following response to be natural, helpful, and encouraging.
-{downgrade_notice}
-
-Draft Response:
-{draft_answer}
-
-Polished Response:"""
-
+# Load all critical prompts on startup
+GEORGE_CONSTITUTION = load_prompt('george_operational_protocol.txt')
+AI_ROUTER_PROMPT_v4 = load_prompt('ai_router_v4.txt') 
+COREF_RESOLUTION_PROMPT = load_prompt('coreference_resolution.txt')
+POLISH_PROMPT = load_prompt('george_polish.txt')
 
 # --- Helper Functions ---
 
 def _get_user_from_request(request) -> Optional[Dict[str, Any]]:
-    """Verify user token via Auth Server."""
+    """Helper to call the Auth Server and verify the user's token."""
     auth_header = request.headers.get('Authorization')
     if not auth_header:
         return None
     try:
-        resp = requests.post(
-            f"{AUTH_SERVER_URL}/verify_token",
-            headers={"Authorization": auth_header},
-            timeout=5
-        )
+        # This call verifies the Firebase token AND gets our internal role/permissions
+        resp = requests.post(f"{AUTH_SERVER_URL}/verify_token", headers={"Authorization": auth_header})
         if resp.status_code == 200:
             return resp.json()
+        logging.warning(f"Auth verification failed with status {resp.status_code}: {resp.text}")
         return None
     except Exception as e:
-        logger.error(f"Auth verification failed: {e}")
+        logging.error(f"Auth verification call failed: {e}")
         return None
 
+def _check_project_access(auth_data: Dict, project_id: str) -> bool:
+    """Checks if user is admin OR has guest access to the project."""
+    if not auth_data:
+        return False
+    # Admins own their projects. We assume they own the project they are querying.
+    # A more robust check would involve a project_owner_id check here.
+    if auth_data.get('role') == 'admin':
+        return True
+    # Guests must have an explicit entry in their guest_projects list
+    if auth_data.get('role') == 'guest' and project_id in auth_data.get('guest_projects', []):
+        return True
+    return False
 
 def get_user_balance(user_id: str) -> float:
-    """Fetch user's API pool balance from Billing Server."""
+    """Gets the user's current API pool balance."""
     try:
-        resp = requests.get(
-            f"{BILLING_SERVER_URL}/balance/{user_id}",
-            timeout=5
-        )
+        resp = requests.get(f"{BILLING_SERVER_URL}/balance/{user_id}")
         if resp.status_code == 200:
             return float(resp.json().get('balance', 0.0))
     except Exception as e:
-        logger.error(f"Failed to get balance for {user_id}: {e}")
+        logging.error(f"Failed to get balance for {user_id}: {e}")
     return 0.0
 
-
 def deduct_cost(user_id: str, job_id: str, cost: float, description: str):
-    """Log transaction in Billing Server."""
+    """Tells the billing server to log a transaction and deduct cost."""
     try:
-        requests.post(
-            f"{BILLING_SERVER_URL}/deduct",
-            json={
-                "user_id": user_id,
-                "cost": cost,
-                "job_id": job_id,
-                "description": description
-            },
-            timeout=5
-        )
+        requests.post(f"{BILLING_SERVER_URL}/deduct", json={
+            "user_id": user_id,
+            "cost": cost,
+            "job_id": job_id,
+            "description": description
+        })
     except Exception as e:
-        logger.error(f"Failed to deduct cost for {user_id}: {e}")
-
+        logging.error(f"Failed to deduct cost for {user_id}: {e}")
 
 def get_triage_data(user_query: str, project_id: str) -> Dict[str, Any]:
-    """CALL 1: Triage query for intent and knowledge source."""
-    prompt = AI_ROUTER_PROMPT_v4.format(
-        user_query=user_query,
-        project_id=project_id
-    )
+    """Call 1: Triage. Determines intent, knowledge source, and memory needs."""
+    prompt = AI_ROUTER_PROMPT_v4.format(user_query=user_query, project_id=project_id)
     result = triage_client.chat(prompt)
     try:
+        # The prompt asks for minified JSON
         data = json.loads(result['response'])
         return data
     except Exception as e:
-        logger.error(f"Triage parse failed: {e}. Defaulting to craft support.")
-        return {
-            "intent": "craft_support",
-            "knowledge_source": "CAUDEX_SUPPORT_KB",
-            "requires_memory": False,
-            "explanation": "Parse error - safe default"
-        }
+        logging.error(f"Failed to parse triage JSON: {e}. Defaulting to craft.")
+        # Fallback to a safe, known state
+        return {"intent": "app_support", "knowledge_source": "CAUDEX_SUPPORT_KB", "requires_memory": False}
 
-
-def resolve_memory(triage_data: Dict, user_id: str, project_id: str) -> Tuple[str, str]:
-    """CALL 1.5: Handle memory & coreference resolution if needed."""
-    user_query = triage_data.get('original_query', '')
-    
+def resolve_memory(triage_data: Dict, user_id: str, project_id: str) -> (str, str, List[Dict]):
+    """
+    Handles Step 1.5 (Memory & Rewrite).
+    Returns: (rewritten_query, chat_history_for_prompt, chat_history_for_llm)
+    """
+    user_query = triage_data['original_query']
     if not triage_data.get('requires_memory', False):
-        return user_query, ""  # No rewrite needed
+        return user_query, "", [] # No rewrite needed, no history list
 
-    logger.info(f"Query requires memory. Fetching history for project={project_id}")
-    
-    # Fetch conversation history from session manager
+    logging.info(f"Query '{user_query}' requires memory. Fetching history...")
     history_list = session_manager.get_recent_history(project_id, user_id)
     chat_history_str = session_manager.format_history_for_prompt(history_list)
     
-    # Rewrite query with triage client (cheapest model)
+    # Call 1.5: Rewrite query
     rewrite_prompt = COREF_RESOLUTION_PROMPT.format(
         chat_history=chat_history_str,
         user_query=user_query
     )
-    result = triage_client.chat(rewrite_prompt)
+    result = triage_client.chat(rewrite_prompt) # Use the cheap client
     
     rewritten_query = result['response'].strip()
-    logger.info(f"Query rewritten: '{user_query[:50]}...' -> '{rewritten_query[:50]}...'")
+    logging.info(f"Query rewritten: '{user_query}' -> '{rewritten_query}'")
     
-    return rewritten_query, chat_history_str
-
+    # Return all three formats
+    return rewritten_query, chat_history_str, history_list
 
 def get_chroma_context(query: str, collection_name: str) -> str:
-    """Fetch RAG context from Chroma Server."""
+    """Calls the Chroma server to get RAG context."""
     if not collection_name or collection_name == "NONE":
         return ""
-    
     try:
         resp = requests.post(
             f"{CHROMA_SERVER_URL}/query",
-            json={
-                "collection_name": collection_name,
-                "query_texts": [query],
-                "n_results": 5
-            },
-            timeout=10
+            json={"collection_name": collection_name, "query_texts": [query], "n_results": 5}
         )
         if resp.status_code == 200:
             results = resp.json()
@@ -223,298 +183,212 @@ def get_chroma_context(query: str, collection_name: str) -> str:
             )
             return context_str
     except Exception as e:
-        logger.error(f"Chroma query failed: {e}")
-    
-    return ""
+        logging.error(f"Failed to get context from Chroma: {e}")
+    return "Error: Could not retrieve knowledge base."
 
-
-# --- Health Check ---
-
-@app.route('/api/status', methods=['GET'])
-def api_status():
-    """Health check endpoint."""
-    return jsonify({
-        'status': 'running',
-        'service': 'George Backend - AI Router',
-        'version': '2.0'
-    })
-
-
-# --- Main Chat Endpoint ---
+# --- Core Chat Endpoint ---
 
 @app.route('/chat', methods=['POST'])
 def chat():
     """
-    Main stateless chat endpoint with 3-call AI routing loop.
-    
-    Flow:
-    1. TRIAGE: Classify intent & knowledge source (Flash - cheapest)
-    2. MEMORY: Resolve coreference if needed (Flash)
-    3. RESOURCE GATHERING: Fetch RAG context from Chroma
-    4. EXECUTION: Generate answer (Flash or Pro based on cost governor)
-    5. POLISH: "Georgeify" response (Flash)
+    Main stateless chat endpoint using the 3-call loop.
     """
-    
-    # --- AUTHENTICATION (The Gatekeeper) ---
+    # 1. AUTHENTICATION (The "Gatekeeper")
     auth_data = _get_user_from_request(request)
-    if not auth_data:
-        return jsonify({"error": "Invalid or missing authentication token"}), 401
+    if not auth_data or not auth_data['valid']:
+        return jsonify({"error": "Invalid or missing token"}), 401
     
-    user_id = auth_data.get('user_id')
-    user_role = auth_data.get('role', 'guest')
+    user_id = auth_data['user_id']
+    user_role = auth_data['role']
     
-    if not user_id:
-        return jsonify({"error": "User ID not found in auth response"}), 401
-    
-    # Parse request
     data = request.get_json()
-    user_query = data.get('query', '').strip()
-    project_id = data.get('project_id', '').strip()
-    
+    user_query = data.get('query')
+    project_id = data.get('project_id')
+
     if not user_query or not project_id:
         return jsonify({"error": "query and project_id are required"}), 400
     
+    # 2. PERMISSION CHECK
+    if not _check_project_access(auth_data, project_id):
+        logging.warning(f"User {user_id} (role: {user_role}) denied access to {project_id}.")
+        return jsonify({"error": "You do not have permission to access this project."}), 403
+
     try:
         # --- CALL 1: TRIAGE ---
-        logger.info(f"[TRIAGE] user={user_id} query='{user_query[:50]}...'")
         triage_data = get_triage_data(user_query, project_id)
         triage_data['original_query'] = user_query
-        intent = triage_data.get('intent', 'craft_support')
+        intent = triage_data.get('intent')
         
         # --- GUARDRAILS ---
         if intent == "creative_task":
-            logger.info(f"[GUARDRAIL] Creative task blocked for user {user_id}")
-            return jsonify({
-                "response": "I see you're working on a creative task! My role is to be your diagnostic partner, not a co-writer. If you write a draft, I'd be happy to analyze it for you.",
-                "intent": "creative_task"
-            }), 200
+            logging.warning(f"User {user_id} triggered creative guardrail.")
+            response_text = "I see you're working on a creative task! My role is to be your diagnostic partner, not a co-writer. If you write a draft, I'd be happy to analyze it for you."
+            session_manager.add_turn(project_id, user_id, user_query, response_text)
+            return jsonify({"response": response_text}), 200
         
         if intent == "emotional_support":
-            logger.info(f"[GUARDRAIL] Emotional support fallback for user {user_id}")
-            return jsonify({
-                "response": "It sounds like you're stuck. That's a normal part of the creative process! Take a short break, or try approaching the scene from a different character's perspective.",
-                "intent": "emotional_support"
-            }), 200
+            logging.info(f"User {user_id} triggered emotional support.")
+            response_text = "It sounds like you're stuck. That's a normal part of the creative process! Take a short break, or try approaching the scene from a different character's perspective."
+            session_manager.add_turn(project_id, user_id, user_query, response_text)
+            return jsonify({"response": response_text}), 200
 
         # --- CALL 1.5: MEMORY & REWRITE ---
-        rewritten_query, chat_history_str = resolve_memory(triage_data, user_id, project_id)
+        rewritten_query, chat_history_str, history_list = resolve_memory(triage_data, user_id, project_id)
 
         # --- RESOURCE GATHERING ---
-        knowledge_source = triage_data.get('knowledge_source', 'NONE')
         kb_name = ""
-        
-        if knowledge_source == "PROJECT_KB":
+        if triage_data.get('knowledge_source') == "PROJECT_KB":
             kb_name = f"project_{project_id}"
-        elif knowledge_source == "CAUDEX_SUPPORT_KB":
-            kb_name = "george_craft_library"
+        elif triage_data.get('knowledge_source') == "CAUDEX_SUPPORT_KB":
+            kb_name = "george_craft_library" # Your static craft guides
+        # Add future "EXTERNAL_API" logic here
         
         context_str = get_chroma_context(rewritten_query, kb_name)
-        logger.info(f"[RAG] Retrieved {len(context_str)} chars from {knowledge_source}")
 
-        # --- CALL 2: EXECUTION WITH COST GOVERNOR ---
+        # --- CALL 2: EXECUTION & COST GOVERNOR ---
         
         # 1. Check Balance
         user_balance = get_user_balance(user_id)
-        logger.info(f"[COST_GOVERNOR] user={user_id} balance=${user_balance:.2f} role={user_role}")
         
-        # 2. Select Model (Governor Logic)
+        # 2. Select Model based on Governor
         model_to_use = answer_client_flash
         downgrade_flag = False
-        selected_model_name = FLASH_MODEL
         
-        if intent == 'complex_analysis' and user_role == 'admin':
-            # Admins can use Pro if they have sufficient balance
+        if intent == 'complex_analysis' and user_role == 'admin': # Guests can't use Pro
             if user_balance >= PRO_MODEL_THRESHOLD:
                 model_to_use = answer_client_pro
-                selected_model_name = PRO_MODEL
-                logger.info(f"[MODEL_SELECT] Using PRO model (balance: ${user_balance:.2f})")
+                logging.info(f"User {user_id} has ${user_balance}. Using PRO model.")
             else:
                 downgrade_flag = True
-                logger.warning(f"[MODEL_SELECT] Downgrading to FLASH (insufficient balance: ${user_balance:.2f})")
-        
-        elif user_role == 'guest':
-            # Guests always use Flash (cost-aware)
-            logger.info(f"[MODEL_SELECT] Guest user restricted to FLASH model")
-        
+                logging.info(f"User {user_id} has ${user_balance}. Downgrading to FLASH.")
+        elif user_role == 'guest' and intent == 'complex_analysis':
+             downgrade_flag = True # Guests are always "downgraded" for complex tasks
+             logging.info(f"User {user_id} is a GUEST. Forcing FLASH model for complex task.")
+
         # 3. Assemble Main Prompt
-        main_prompt = f"""{GEORGE_CONSTITUTION}
+        main_prompt = f"""
+        {GEORGE_CONSTITUTION}
 
-CONVERSATION HISTORY:
-{chat_history_str}
+        USER QUERY:
+        {user_query}
 
-RETRIEVED CONTEXT:
-{context_str}
+        ---
+        RETRIEVED CONTEXT (Vetted Sources):
+        {context_str}
+        ---
 
-USER QUERY:
-{rewritten_query}
-
-Based only on the CONVERSATION HISTORY and RETRIEVED CONTEXT, provide a thoughtful response."""
+        Based *only* on the RETRIEVED CONTEXT, answer the USER QUERY.
+        """
         
         # 4. Get Draft Answer
-        logger.info(f"[EXECUTION] Calling {selected_model_name} for response generation")
-        result_dict = model_to_use.chat(main_prompt)
+        # We pass the history_list (Gemini-formatted) to the chat() method
+        result_dict = model_to_use.chat(main_prompt, history=history_list)
         draft_answer = result_dict['response']
         call_cost = result_dict.get('cost', 0.0)
-        
-        logger.info(f"[EXECUTION] Response received | cost=${call_cost:.6f}")
 
         # 5. Report Cost to Billing Server
         if call_cost > 0:
-            job_id = f"chat-{uuid.uuid4()}"
-            deduct_cost(user_id, job_id, call_cost, f"Chat: {intent} ({selected_model_name})")
+            deduct_cost(user_id, f"chat-{uuid.uuid4()}", call_cost, f"Chat: {intent}")
 
-        # --- CALL 3: GEORGEIFICATION POLISH ---
+        # --- CALL 3: "GEORGEIFICATION" POLISH ---
         
-        downgrade_notice = ""
+        polish_instructions = "Rephrase the DRAFT ANSWER to be natural, helpful, and consistent with your persona."
+        
         if downgrade_flag:
-            downgrade_notice = (
-                "\n\nIMPORTANT: The user has limited credit. Add a gentle, friendly upsell after the response:\n"
-                "'This is a complex question that would benefit from deeper analysis. "
-                "A quick $5 top-up would let me engage my advanced reasoning module for an even better response!'"
+            polish_instructions = (
+                "You must also add a gentle, friendly upsell. Explain that this is a complex question "
+                "and you could provide a much deeper analysis with a 'pick-me-up' (a $5 coffee) to "
+                "activate your advanced reasoning module."
             )
-        
-        polish_prompt = POLISH_PROMPT_TEMPLATE.format(
-            downgrade_notice=downgrade_notice,
+
+        polish_prompt = POLISH_PROMPT.format(
+            polish_instructions=polish_instructions,
             draft_answer=draft_answer
         )
         
-        logger.info("[POLISH] Calling Flash model for response polishing")
         polish_result = polish_client.chat(polish_prompt)
         final_answer = polish_result['response']
-        polish_cost = polish_result.get('cost', 0.0)
         
-        if polish_cost > 0:
-            deduct_cost(user_id, f"chat-{uuid.uuid4()}", polish_cost, "Polish (Flash)")
-
         # --- SAVE & RESPOND ---
         session_manager.add_turn(project_id, user_id, user_query, final_answer)
-        
-        final_balance = get_user_balance(user_id)
-        total_cost = call_cost + polish_cost
-        
-        logger.info(f"[RESPONSE] user={user_id} intent={intent} cost=${total_cost:.6f} balance=${final_balance:.2f}")
         
         return jsonify({
             "response": final_answer,
             "intent": intent,
-            "cost": round(total_cost, 6),
-            "model_used": selected_model_name,
+            "cost": call_cost,
             "downgraded": downgrade_flag,
-            "balance_remaining": round(final_balance, 2),
-            "balance_before": round(user_balance, 2)
-        }), 200
+            "balance": user_balance - call_cost
+        })
 
     except Exception as e:
-        logger.error(f"[CRITICAL] Unhandled error in /chat: {e}", exc_info=True)
+        logging.error(f"Critical error in /chat: {e}", exc_info=True)
         return jsonify({"error": "An internal server error occurred."}), 500
 
-
-# --- Job Endpoints (for async operations) ---
+# --- Job/Report Endpoints ---
 
 @app.route('/jobs/<job_id>', methods=['GET'])
 def get_job_status(job_id):
-    """Get the status of a specific job."""
-    job = job_manager.get_job_status(job_id)
-    if job is None:
-        return jsonify({'error': 'Job not found'}), 404
+    # TODO: Add auth check: user must own this job
+    job = job_manager.get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
     return jsonify(job)
 
-
 @app.route('/project/<project_id>/jobs', methods=['GET'])
-def get_all_project_jobs(project_id):
-    """Get all jobs for a specific project."""
+def get_project_jobs(project_id):
+    # TODO: Add auth check: user must own this project
     jobs = job_manager.get_jobs_for_project(project_id)
-    return jsonify(jobs)
+    return jsonify({"project_id": project_id, "jobs": jobs})
 
-
-def _run_wiki_generation_task(job_id, project_id, user_id):
-    """Background task for wiki generation."""
-    try:
-        job_manager.update_job_status(job_id, status='running', progress=10, message='Initializing wiki generation...')
-        
-        job_manager.update_job_status(job_id, status='running', progress=50, message='Generating wiki content...')
-        
-        # Placeholder result
-        result = {
-            "files_created": 20,
-            "graph_nodes": 150,
-            "wiki_url": f"/project/{project_id}/wiki"
-        }
-        
-        job_manager.update_job_status(
-            job_id,
-            status='completed',
-            progress=100,
-            message='Wiki generation complete!',
-            result=result
-        )
-        
-    except Exception as e:
-        logger.error(f"Wiki generation failed: {e}", exc_info=True)
-        job_manager.update_job_status(
-            job_id,
-            status='failed',
-            progress=0,
-            message=f'Error: {str(e)}'
-        )
+# --- EXAMPLE: Async "Wiki Generation" Endpoint ---
+def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
+    """The actual heavy-lifting for the wiki job."""
+    logging.info(f"Starting WIKI job for {project_id}")
+    # 1. Get all chunks from chroma_server
+    # 2. Get graph data from chroma_server
+    # 3. Call KnowledgeExtractionOrchestrator
+    # 4. Save files using filesystem_server
+    # 5. Snapshot with git_server
+    import time
+    time.sleep(10) # Simulate 10 seconds of work
+    logging.info(f"Finished WIKI job for {project_id}")
+    return {"files_created": 15, "entities_found": 42}
 
 
 @app.route('/project/<project_id>/generate_wiki', methods=['POST'])
 def generate_wiki(project_id):
-    """Start asynchronous wiki generation for a project."""
-    try:
-        auth_data = _get_user_from_request(request)
-        if not auth_data:
-            return jsonify({"error": "Unauthorized"}), 401
-        
-        user_id = auth_data.get('user_id', 'anonymous')
-        
-        # 1. Create job receipt
-        job_id = job_manager.create_job(
-            project_id=project_id,
-            user_id=user_id,
-            job_type="wiki_generation"
-        )
-        
-        # 2. Start background task
-        job_manager.run_async(
-            job_id,
-            _run_wiki_generation_task,
-            job_id,
-            project_id,
-            user_id
-        )
-        
-        # 3. Return 202 Accepted
-        return jsonify({
-            "message": "Wiki generation has started.",
-            "job_id": job_id,
-            "status_url": f"/jobs/{job_id}"
-        }), 202
-        
-    except Exception as e:
-        logger.error(f"Wiki generation request failed: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
+    auth_data = _get_user_from_request(request)
+    if not auth_data or auth_data['role'] != 'admin':
+        return jsonify({"error": "Only project admins can run reports."}), 403
+    
+    user_id = auth_data['user_id']
+    
+    # TODO: Check API pool balance before starting!
+    
+    # 1. Create the job "receipt"
+    job_id = job_manager.create_job(
+        project_id=project_id, 
+        user_id=user_id, 
+        job_type="wiki_generation"
+    )
+    
+    # 2. Start the background task
+    job_manager.run_async(
+        job_id, 
+        _run_wiki_generation_task, 
+        project_id, 
+        user_id
+    )
+    
+    # 3. Return immediately
+    return jsonify({
+        "message": "Wiki generation has started.",
+        "job_id": job_id,
+        "status_url": f"/jobs/{job_id}"
+    }), 202 # "Accepted"
 
 if __name__ == '__main__':
-    """
-    George Backend - AI Router with Cost Governor
-    
-    Environment Variables Required:
-    - GEMINI_API_KEY: Google Gemini API key
-    - AUTH_SERVER_URL: Auth server URL (default: http://localhost:5005)
-    - BILLING_SERVER_URL: Billing server URL (default: http://localhost:5004)
-    - CHROMA_SERVER_URL: Chroma server URL (default: http://localhost:5002)
-    """
-    logger.info("=" * 70)
-    logger.info("🚀 George Backend - AI Router with Cost Governor")
-    logger.info("=" * 70)
-    logger.info(f"Auth Server: {AUTH_SERVER_URL}")
-    logger.info(f"Billing Server: {BILLING_SERVER_URL}")
-    logger.info(f"Chroma Server: {CHROMA_SERVER_URL}")
-    logger.info(f"Pro Model Threshold: ${PRO_MODEL_THRESHOLD}")
-    logger.info("=" * 70)
-    
-    # Run Flask development server
-    app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
+    print("--- Caudex Pro AI Router (The Brain) ---")
+    print("Ensure all microservices (Auth, Billing, Chroma, Filesystem, Git) are running.")
+    print("Running on http://localhost:5000")
+    app.run(debug=True, port=5000)
