@@ -4,8 +4,10 @@ import codecs
 import chardet
 import re
 import logging
+import requests
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
+from bs4 import BeautifulSoup  # For WebSanitizer
 
 # Optional dependencies
 try:
@@ -216,7 +218,64 @@ class DocumentParser:
             except Exception as e:
                 raise DocumentParserError(f"Unsupported and un-parseable file format: {file_type} ({e})")
 
-# ... (rest of your TextChunk and TextChunker classes remain unchanged) ...
+class WebSanitizer:
+    """Fetches and sanitizes web content for safe ingestion."""
+    
+    @staticmethod
+    def fetch_and_sanitize(url: str) -> Dict[str, str]:
+        """
+        Fetches a URL and returns the sanitized plain text.
+        
+        Args:
+            url: The URL to fetch and sanitize
+            
+        Returns:
+            Dictionary with 'content', 'title', and 'source_url'
+            
+        Raises:
+            DocumentParserError: If fetching or sanitizing fails
+        """
+        try:
+            # 1. Fetch with a user-agent to avoid blocking
+            headers = {'User-Agent': 'CaudexPro-Agent/1.0'}
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            
+            # 2. Parse HTML
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # 3. Aggressive Cleaning (The Safety Step)
+            # Remove all script, style, meta, iframe, and link tags
+            for script in soup(["script", "style", "meta", "iframe", "link", "noscript"]):
+                script.decompose()
+            
+            # 4. Extract Text
+            text = soup.get_text(separator='\n')
+            
+            # 5. Clean Whitespace
+            # Collapse multiple newlines into two max (paragraph breaks)
+            lines = (line.strip() for line in text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            clean_text = '\n'.join(chunk for chunk in chunks if chunk)
+            
+            title = soup.title.string if soup.title else url
+            
+            logger.info(f"Successfully sanitized content from {url}")
+            
+            return {
+                "content": clean_text,
+                "title": title,
+                "source_url": url
+            }
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Web fetch failed for {url}: {e}")
+            raise DocumentParserError(f"Failed to fetch URL: {e}")
+        except Exception as e:
+            logger.error(f"Web sanitization failed for {url}: {e}")
+            raise DocumentParserError(f"Failed to fetch or sanitize URL: {e}")
+
+
 @dataclass
 class TextChunk:
     """Represents a chunk of text with metadata"""

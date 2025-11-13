@@ -2,9 +2,11 @@
 from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 import os
-from services import DocumentParser, TextChunker, DocumentParserError
+from services import DocumentParser, TextChunker, WebSanitizer, DocumentParserError
 import requests # <-- Make sure requests is imported
 import dataclasses # <-- Import dataclasses
+import uuid
+import json
 
 app = Flask(__name__)
 
@@ -140,6 +142,127 @@ def upload_file(project_id):
             return jsonify({'error': f"An unexpected error occurred: {e}"}), 500
     else:
         return jsonify({'error': 'File type not allowed. Allowed: txt, md, docx, pdf, odt'}), 400
+
+@app.route('/preview_url', methods=['POST'])
+def preview_url():
+    """
+    Fetches a URL, sanitizes it, and saves it to a temp file.
+    Returns the preview text for user confirmation.
+    Does NOT index it yet.
+    """
+    data = request.get_json()
+    url = data.get('url')
+    project_id = data.get('project_id')
+    
+    if not url or not project_id:
+        return jsonify({'error': 'url and project_id required'}), 400
+        
+    try:
+        # 1. Sanitize
+        result = WebSanitizer.fetch_and_sanitize(url)
+        
+        # 2. Save to _temp folder
+        temp_id = str(uuid.uuid4())
+        temp_dir = os.path.join(app.config['PROJECTS_FOLDER'], project_id, '_temp')
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        temp_filename = f"web_import_{temp_id}.txt"
+        temp_path = os.path.join(temp_dir, temp_filename)
+        
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            json.dump(result, f) 
+            
+        # 3. Return Preview
+        return jsonify({
+            'temp_file_id': temp_filename,
+            'title': result['title'],
+            'url': result['source_url'],
+            'preview_text': result['content'][:1000] + "..." 
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/confirm_url_import', methods=['POST'])
+def confirm_url_import():
+    """
+    Takes a temp_file_id, reads the sanitized data, chunks it,
+    and sends it to the chroma_server.
+    """
+    data = request.get_json()
+    project_id = data.get('project_id')
+    temp_file_id = data.get('temp_file_id')
+    
+    if not project_id or not temp_file_id:
+        return jsonify({'error': 'project_id and temp_file_id required'}), 400
+        
+    temp_path = os.path.join(app.config['PROJECTS_FOLDER'], project_id, '_temp', temp_file_id)
+    if not os.path.exists(temp_path):
+        return jsonify({'error': 'Preview expired or not found'}), 404
+        
+    try:
+        # 1. Read the Temp File
+        with open(temp_path, 'r', encoding='utf-8') as f:
+            import_data = json.load(f)
+            
+        content = import_data['content']
+        source_url = import_data['source_url']
+        title = import_data['title']
+        
+        # 2. Chunk It
+        chunks = chunker.chunk_text(content, source_file=source_url, chapter=title)
+        
+        # 3. Send to Chroma
+        chunk_dicts = []
+        for i, chunk in enumerate(chunks):
+            chunk_data = dataclasses.asdict(chunk)
+            chroma_metadata = {
+                "source_file": chunk.source_file,
+                "chapter": chunk.chapter,
+                "paragraph_start": chunk.paragraph_start,
+                "paragraph_end": chunk.paragraph_end,
+                "character_start": chunk.character_start,
+                "character_end": chunk.character_end
+            }
+            chunk_dicts.append({
+                "text": chunk.text,
+                "metadata": chroma_metadata,
+                "id": f"{project_id}_web_{temp_file_id}_{i}"
+            })
+
+        collection_name = f"project_{project_id}"
+        payload = {
+            "collection_name": collection_name,
+            "chunks": chunk_dicts
+        }
+        
+        # Ensure collection exists
+        requests.post(
+            f"{CHROMA_SERVER_URL}/create_collection",
+            json={"collection_name": collection_name},
+            timeout=10
+        ).raise_for_status()
+
+        response = requests.post(
+            f"{CHROMA_SERVER_URL}/add_chunks", 
+            json=payload, 
+            timeout=60
+        )
+        response.raise_for_status()
+        
+        # 4. Cleanup
+        os.remove(temp_path)
+        
+        return jsonify({'message': 'Web page imported successfully', 'response': response.json()}), 200
+
+    except requests.exceptions.RequestException as e:
+        app.logger.error(f"Failed to hand off chunks to chroma-core: {e}")
+        return jsonify({"error": f"File processed, but indexing service failed: {e.response.text if e.response else 'No response'}"}), 502
+    except Exception as e:
+        app.logger.error(f"Failed to confirm import: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/project/<project_id>/files', methods=['GET'])
 def list_files(project_id):
