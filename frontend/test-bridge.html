@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Caudex API Bridge Test</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 1000px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            color: #667eea;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+        }
+
+        .section {
+            margin-bottom: 30px;
+        }
+
+        .section h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.5em;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .section h3 {
+            color: #764ba2;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        textarea {
+            width: 100%;
+            padding: 12px 20px;
+            border: 2px solid #667eea;
+            border-radius: 10px;
+            font-size: 1em;
+            margin-bottom: 10px;
+            font-family: inherit;
+        }
+
+        input[type="text"]:focus,
+        input[type="number"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #764ba2;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .result {
+            background: #f8f9ff;
+            border: 2px solid #667eea;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .result.error {
+            border-color: #f44336;
+            background: #ffebee;
+            color: #f44336;
+        }
+
+        .result.success {
+            border-color: #4caf50;
+            background: #f1f8f4;
+            color: #2e7d32;
+        }
+
+        .status {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+            background: #f44336;
+        }
+
+        .status.connected {
+            background: #4caf50;
+        }
+
+        .status-text {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        .input-group label {
+            display: block;
+            color: #333;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌉 Caudex API Bridge Test</h1>
+            <p>Test your frontend-backend communication</p>
+            <p class="status-text">
+                <span class="status" id="statusIndicator"></span>
+                <span id="statusText">Checking connection...</span>
+            </p>
+        </div>
+
+        <div class="section">
+            <h2>1️⃣ Test Chat Endpoint</h2>
+            <h3>Send a query to the AI router</h3>
+            <div class="input-group">
+                <label>Project ID:</label>
+                <input type="text" id="projectId" value="test-project" placeholder="e.g., test-project">
+            </div>
+            <div class="input-group">
+                <label>Query:</label>
+                <textarea id="queryText" placeholder="e.g., What are the main themes?" rows="3"></textarea>
+            </div>
+            <div class="controls">
+                <button onclick="testChat()">📤 Send Chat Query</button>
+                <button onclick="clearResult('chatResult')">Clear</button>
+            </div>
+            <div class="result" id="chatResult" style="display: none;"></div>
+        </div>
+
+        <div class="section">
+            <h2>2️⃣ Test Job Status Endpoint</h2>
+            <h3>Check status of an async job</h3>
+            <div class="input-group">
+                <label>Job ID:</label>
+                <input type="text" id="jobId" value="job-123" placeholder="e.g., job-123">
+            </div>
+            <div class="controls">
+                <button onclick="testJobStatus()">📊 Get Job Status</button>
+                <button onclick="clearResult('jobResult')">Clear</button>
+            </div>
+            <div class="result" id="jobResult" style="display: none;"></div>
+        </div>
+
+        <div class="section">
+            <h2>3️⃣ Test Project Jobs Endpoint</h2>
+            <h3>List all jobs for a project</h3>
+            <div class="input-group">
+                <label>Project ID:</label>
+                <input type="text" id="projectId2" value="test-project" placeholder="e.g., test-project">
+            </div>
+            <div class="controls">
+                <button onclick="testProjectJobs()">📋 Get Project Jobs</button>
+                <button onclick="clearResult('jobsResult')">Clear</button>
+            </div>
+            <div class="result" id="jobsResult" style="display: none;"></div>
+        </div>
+
+        <div class="section">
+            <h2>4️⃣ Test Wiki Generation Endpoint</h2>
+            <h3>Generate wiki for a project (async)</h3>
+            <div class="input-group">
+                <label>Project ID:</label>
+                <input type="text" id="projectId3" value="test-project" placeholder="e.g., test-project">
+            </div>
+            <div class="controls">
+                <button onclick="testWikiGeneration()">📖 Generate Wiki</button>
+                <button onclick="clearResult('wikiResult')">Clear</button>
+            </div>
+            <div class="result" id="wikiResult" style="display: none;"></div>
+        </div>
+
+        <div class="section">
+            <h2>5️⃣ Test Admin Costs Endpoint</h2>
+            <h3>Get aggregated cost summary (admin only)</h3>
+            <div class="controls">
+                <button onclick="testAdminCosts()">💰 Get Admin Costs</button>
+                <button onclick="clearResult('costsResult')">Clear</button>
+            </div>
+            <div class="result" id="costsResult" style="display: none;"></div>
+        </div>
+
+        <div class="section">
+            <h2>🔗 API Configuration</h2>
+            <div class="input-group">
+                <label>Backend URL:</label>
+                <input type="text" id="backendUrl" value="http://localhost:5001" placeholder="e.g., http://localhost:5001">
+            </div>
+            <div class="controls">
+                <button onclick="updateBackendUrl()">Update URL</button>
+                <button onclick="testConnection()">🔄 Test Connection</button>
+            </div>
+            <div id="connectionResult"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { CaudexAPIClient, initializeClient, getClient } from './src/api-client/index.ts';
+
+        // Global client reference
+        window.apiClient = null;
+        window.currentBackendUrl = 'http://localhost:5001';
+
+        // Initialize on load
+        window.addEventListener('load', async () => {
+            await initializeBackend();
+            checkConnection();
+            setInterval(checkConnection, 30000); // Check every 30 seconds
+        });
+
+        async function initializeBackend() {
+            try {
+                initializeClient(window.currentBackendUrl);
+                window.apiClient = getClient();
+                console.log('✅ API Client initialized');
+            } catch (error) {
+                console.error('Failed to initialize API client:', error);
+            }
+        }
+
+        window.updateBackendUrl = async function() {
+            const newUrl = document.getElementById('backendUrl').value;
+            if (!newUrl) {
+                alert('Please enter a valid backend URL');
+                return;
+            }
+            window.currentBackendUrl = newUrl;
+            await initializeBackend();
+            await checkConnection();
+        };
+
+        async function checkConnection() {
+            const statusIndicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('statusText');
+
+            try {
+                const response = await fetch(window.currentBackendUrl + '/chat', {
+                    method: 'OPTIONS',
+                });
+                if (response.ok || response.status === 405) { // 405 is OK for OPTIONS on POST endpoint
+                    statusIndicator.classList.add('connected');
+                    statusText.textContent = `✅ Connected to ${window.currentBackendUrl}`;
+                } else {
+                    throw new Error('Server not responding');
+                }
+            } catch (error) {
+                statusIndicator.classList.remove('connected');
+                statusText.textContent = `❌ Cannot connect to ${window.currentBackendUrl}`;
+            }
+        }
+
+        window.testConnection = async function() {
+            await checkConnection();
+        };
+
+        window.testChat = async function() {
+            const projectId = document.getElementById('projectId').value;
+            const query = document.getElementById('queryText').value;
+
+            if (!query) {
+                alert('Please enter a query');
+                return;
+            }
+
+            showResult('chatResult', '<span class="spinner"></span> Sending query...');
+
+            try {
+                const response = await window.apiClient.postChat(query, projectId);
+                showResult('chatResult', JSON.stringify(response, null, 2), 'success');
+            } catch (error) {
+                showResult('chatResult', `Error: ${error.message}`, 'error');
+            }
+        };
+
+        window.testJobStatus = async function() {
+            const jobId = document.getElementById('jobId').value;
+
+            if (!jobId) {
+                alert('Please enter a job ID');
+                return;
+            }
+
+            showResult('jobResult', '<span class="spinner"></span> Fetching job status...');
+
+            try {
+                const response = await window.apiClient.getJobStatus(jobId);
+                showResult('jobResult', JSON.stringify(response, null, 2), 'success');
+            } catch (error) {
+                showResult('jobResult', `Error: ${error.message}`, 'error');
+            }
+        };
+
+        window.testProjectJobs = async function() {
+            const projectId = document.getElementById('projectId2').value;
+
+            if (!projectId) {
+                alert('Please enter a project ID');
+                return;
+            }
+
+            showResult('jobsResult', '<span class="spinner"></span> Fetching project jobs...');
+
+            try {
+                const response = await window.apiClient.getProjectJobs(projectId);
+                showResult('jobsResult', JSON.stringify(response, null, 2), 'success');
+            } catch (error) {
+                showResult('jobsResult', `Error: ${error.message}`, 'error');
+            }
+        };
+
+        window.testWikiGeneration = async function() {
+            const projectId = document.getElementById('projectId3').value;
+
+            if (!projectId) {
+                alert('Please enter a project ID');
+                return;
+            }
+
+            showResult('wikiResult', '<span class="spinner"></span> Triggering wiki generation...');
+
+            try {
+                const response = await window.apiClient.generateWiki(projectId);
+                showResult('wikiResult', JSON.stringify(response, null, 2), 'success');
+            } catch (error) {
+                showResult('wikiResult', `Error: ${error.message}`, 'error');
+            }
+        };
+
+        window.testAdminCosts = async function() {
+            showResult('costsResult', '<span class="spinner"></span> Fetching admin costs...');
+
+            try {
+                const response = await window.apiClient.getAdminCosts();
+                showResult('costsResult', JSON.stringify(response, null, 2), 'success');
+            } catch (error) {
+                showResult('costsResult', `Error: ${error.message}`, 'error');
+            }
+        };
+
+        function showResult(elementId, content, type = 'success') {
+            const element = document.getElementById(elementId);
+            element.innerHTML = content;
+            element.style.display = 'block';
+            if (type) {
+                element.className = 'result ' + type;
+            } else {
+                element.className = 'result';
+            }
+        }
+
+        window.clearResult = function(elementId) {
+            document.getElementById(elementId).style.display = 'none';
+        };
+    </script>
+</body>
+</html>

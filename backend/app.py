@@ -11,6 +11,7 @@ from flask.views import MethodView
 from dotenv import load_dotenv
 from typing import Dict, Any, Optional, List, Tuple
 from flask_smorest import Api, abort
+from flask_cors import CORS
 
 # --- Local Imports ---
 # These are the new foundational services we just planned
@@ -24,6 +25,7 @@ from knowledge_extraction.orchestrator import KnowledgeExtractionOrchestrator
 # --- Load Config ---
 load_dotenv()
 app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
 
 # --- Configuration for flask-smorest API documentation ---
 app.config["API_TITLE"] = "Caudex Pro AI Router"
