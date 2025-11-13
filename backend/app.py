@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 # --- Local Imports ---
 # These are the new foundational services we just planned
@@ -104,15 +104,31 @@ def _check_project_access(auth_data: Dict, project_id: str) -> bool:
         return True
     return False
 
-def get_user_balance(user_id: str) -> float:
-    """Gets the user's current API pool balance."""
+def get_user_balance(user_id: str) -> Optional[float]:
+    """
+    Gets the user's current API pool balance.
+    
+    Returns:
+        float: The user's balance on success.
+        None: On any failure (e.g., connection error, non-200 status).
+              This signals the frontend and internal logic to fail-open.
+    """
     try:
-        resp = requests.get(f"{BILLING_SERVER_URL}/balance/{user_id}")
+        resp = requests.get(
+            f"{BILLING_SERVER_URL}/balance/{user_id}",
+            timeout=5
+        )
         if resp.status_code == 200:
             return float(resp.json().get('balance', 0.0))
+        
+        # Log non-200 status as a warning
+        logging.warning(f"Billing server returned non-200 status ({resp.status_code}) for user {user_id}: {resp.text}")
+    
     except Exception as e:
-        logging.error(f"Failed to get balance for {user_id}: {e}")
-    return 0.0
+        # Log connection errors, timeouts, etc.
+        logging.error(f"Failed to connect to billing server for user {user_id}: {e}", exc_info=True)
+    
+    return None  # Return None on any failure (fail-open signal)
 
 def deduct_cost(user_id: str, job_id: str, cost: float, description: str):
     """Tells the billing server to log a transaction and deduct cost."""
@@ -165,14 +181,23 @@ def resolve_memory(triage_data: Dict, user_id: str, project_id: str) -> (str, st
     # Return all three formats
     return rewritten_query, chat_history_str, history_list
 
-def get_chroma_context(query: str, collection_name: str) -> str:
-    """Calls the Chroma server to get RAG context."""
+def get_chroma_context(query: str, collection_name: str) -> Tuple[Optional[str], bool]:
+    """
+    Calls the Chroma server to get RAG context.
+    
+    Returns:
+        (context_str, True) on success with context.
+        ("", True) if no context was needed.
+        (None, False) on failure.
+    """
     if not collection_name or collection_name == "NONE":
-        return ""
+        return "", True  # Success, but no context needed
+    
     try:
         resp = requests.post(
             f"{CHROMA_SERVER_URL}/query",
-            json={"collection_name": collection_name, "query_texts": [query], "n_results": 5}
+            json={"collection_name": collection_name, "query_texts": [query], "n_results": 5},
+            timeout=10
         )
         if resp.status_code == 200:
             results = resp.json()
@@ -182,10 +207,14 @@ def get_chroma_context(query: str, collection_name: str) -> str:
                 f"[Source: {meta.get('source_file', 'Unknown')}]\n{doc}"
                 for doc, meta in zip(docs, metadatas)
             )
-            return context_str
+            return context_str, True  # Success with context
+        else:
+            # Handle non-200 status codes
+            logging.warning(f"Chroma server returned non-200 status: {resp.status_code} {resp.text}")
+            return None, False  # Failure
     except Exception as e:
         logging.error(f"Failed to get context from Chroma: {e}")
-    return "Error: Could not retrieve knowledge base."
+        return None, False  # Failure
 
 # --- Core Chat Endpoint ---
 
@@ -241,30 +270,53 @@ def chat():
         if triage_data.get('knowledge_source') == "PROJECT_KB":
             kb_name = f"project_{project_id}"
         elif triage_data.get('knowledge_source') == "CAUDEX_SUPPORT_KB":
-            kb_name = "george_craft_library" # Your static craft guides
+            kb_name = "george_craft_library"  # Your static craft guides
         # Add future "EXTERNAL_API" logic here
         
-        context_str = get_chroma_context(rewritten_query, kb_name)
+        context_str, context_success = get_chroma_context(rewritten_query, kb_name)
+        
+        # RESILIENCE CHECK: If Chroma failed, abort gracefully with 503
+        if not context_success:
+            logger.error(f"[RESILIENCE] Aborting chat for user {user_id} due to Chroma failure.")
+            return jsonify({
+                "error": "Your knowledge base is temporarily unavailable. Please try again in a moment."
+            }), 503  # Service Unavailable
 
         # --- CALL 2: EXECUTION & COST GOVERNOR ---
         
         # 1. Check Balance
-        user_balance = get_user_balance(user_id)
+        user_balance_or_none = get_user_balance(user_id)
+        billing_server_failed = (user_balance_or_none is None)
         
+        # Default to 0.0 for calculations, but we use the None for logic
+        user_balance = user_balance_or_none if not billing_server_failed else 0.0
+
+        if billing_server_failed:
+            logger.warning(f"[FAIL-OPEN] Billing server failed for user {user_id}. Allowing Pro model.")
+
         # 2. Select Model based on Governor
         model_to_use = answer_client_flash
         downgrade_flag = False
         
-        if intent == 'complex_analysis' and user_role == 'admin': # Guests can't use Pro
-            if user_balance >= PRO_MODEL_THRESHOLD:
+        if intent == 'complex_analysis' and user_role == 'admin':  # Guests can't use Pro
+            
+            # Use Pro model if:
+            # A) Billing server failed (fail-open principle)
+            # B) Billing server succeeded AND balance is sufficient
+            
+            if billing_server_failed or user_balance >= PRO_MODEL_THRESHOLD:
                 model_to_use = answer_client_pro
-                logging.info(f"User {user_id} has ${user_balance}. Using PRO model.")
+                if billing_server_failed:
+                    logger.info(f"User {user_id}: Using PRO model (Billing server failed, fail-open).")
+                else:
+                    logger.info(f"User {user_id} has ${user_balance:.2f}. Using PRO model.")
             else:
+                # This 'else' block now only runs if billing succeeded AND balance is low
                 downgrade_flag = True
-                logging.info(f"User {user_id} has ${user_balance}. Downgrading to FLASH.")
+                logger.info(f"User {user_id} has ${user_balance:.2f}. Downgrading to FLASH.")
         elif user_role == 'guest' and intent == 'complex_analysis':
-             downgrade_flag = True # Guests are always "downgraded" for complex tasks
-             logging.info(f"User {user_id} is a GUEST. Forcing FLASH model for complex task.")
+             downgrade_flag = True  # Guests are always "downgraded" for complex tasks
+             logger.info(f"User {user_id} is a GUEST. Forcing FLASH model for complex task.")
 
         # 3. Assemble Main Prompt
         main_prompt = f"""
@@ -313,12 +365,17 @@ def chat():
         # --- SAVE & RESPOND ---
         session_manager.add_turn(project_id, user_id, user_query, final_answer)
         
+        # Calculate final balance, handling billing server failure
+        final_balance = None
+        if not billing_server_failed:
+            final_balance = user_balance - call_cost
+            
         return jsonify({
             "response": final_answer,
             "intent": intent,
             "cost": call_cost,
             "downgraded": downgrade_flag,
-            "balance": user_balance - call_cost
+            "balance": final_balance  # This will be 'null' in JSON if billing failed
         })
 
     except Exception as e:
