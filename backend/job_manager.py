@@ -161,12 +161,12 @@ class JobManager:
         logger.info(f"Resuming job {job_id}...")
         self.run_async(job_id, task_function, *args, **kwargs)
 
-    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieves a single job's status and details."""
+    def get_job(self, job_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves a single job's status and details, scoped to a user."""
         try:
             with self._get_conn() as conn:
                 conn.row_factory = sqlite3.Row
-                cursor = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,))
+                cursor = conn.execute("SELECT * FROM jobs WHERE job_id = ? AND user_id = ?", (job_id, user_id))
                 row = cursor.fetchone()
                 if row:
                     result_dict = dict(row)
@@ -179,17 +179,17 @@ class JobManager:
                     return result_dict
                 return None
         except Exception as e:
-            logger.error(f"Failed to get job {job_id}: {e}")
+            logger.error(f"Failed to get job {job_id} for user {user_id}: {e}")
             return None
 
-    def get_jobs_for_project(self, project_id: str) -> List[Dict[str, Any]]:
-        """Lists all jobs (newest first) for a given project."""
+    def get_jobs_for_project(self, project_id: str, user_id: str) -> List[Dict[str, Any]]:
+        """Lists all jobs (newest first) for a given project, scoped to a user."""
         try:
             with self._get_conn() as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute(
-                    "SELECT * FROM jobs WHERE project_id = ? ORDER BY created_at DESC", 
-                    (project_id,)
+                    "SELECT * FROM jobs WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC", 
+                    (project_id, user_id)
                 )
                 jobs = []
                 for row in cursor.fetchall():
@@ -202,5 +202,5 @@ class JobManager:
                     jobs.append(job)
                 return jobs
         except Exception as e:
-            logger.error(f"Failed to get jobs for project {project_id}: {e}")
+            logger.error(f"Failed to get jobs for project {project_id} for user {user_id}: {e}")
             return []

@@ -328,16 +328,36 @@ def chat():
 
 @app.route('/jobs/<job_id>', methods=['GET'])
 def get_job_status(job_id):
-    # TODO: Add auth check: user must own this job
-    job = job_manager.get_job(job_id)
+    # 1. AUTHENTICATION
+    auth_data = _get_user_from_request(request)
+    if not auth_data or not auth_data.get('valid'):
+        return jsonify({"error": "Invalid or missing token"}), 401
+    
+    user_id = auth_data.get('user_id')
+    
+    # 2. Get Job (now securely scoped by the JobManager)
+    job = job_manager.get_job(job_id, user_id)
+    
     if not job:
+        # This now correctly returns 404 if the job doesn't exist OR if the user doesn't own it
         return jsonify({"error": "Job not found"}), 404
+    
     return jsonify(job)
 
 @app.route('/project/<project_id>/jobs', methods=['GET'])
 def get_project_jobs(project_id):
-    # TODO: Add auth check: user must own this project
-    jobs = job_manager.get_jobs_for_project(project_id)
+    # 1. AUTHENTICATION
+    auth_data = _get_user_from_request(request)
+    if not auth_data or not auth_data.get('valid'):
+        return jsonify({"error": "Invalid or missing token"}), 401
+    
+    user_id = auth_data.get('user_id')
+    
+    # 2. Get Jobs (now securely scoped to this user)
+    jobs = job_manager.get_jobs_for_project(project_id, user_id)
+    
+    logger.info(f"User {user_id} retrieved {len(jobs)} jobs for project {project_id}")
+    
     return jsonify({"project_id": project_id, "jobs": jobs})
 
 # --- EXAMPLE: Async "Wiki Generation" Endpoint ---
