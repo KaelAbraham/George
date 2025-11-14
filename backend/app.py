@@ -494,12 +494,12 @@ class SaveChatNote(MethodView):
     """Saves a specific chat turn as a note in the project's knowledge base."""
 
     @blp_chat.doc(
-        description="Saves a specific prompt/response pair as a new 'note' file in the project's file system and ingests it into the knowledge base.",
-        summary="Save a chat turn as a project note."
+        description="Saves a specific prompt/response pair as a new 'note' file in the project's file system, ingests it into the knowledge base, and commits it to the project's version history.",
+        summary="Save a chat turn as a project note (file + vector + graph)."
     )
     @blp_chat.response(201, SaveNoteResponseSchema)
     def post(self, message_id):
-        """Save chat turn to notes and KB."""
+        """Save chat turn to notes, KB, and project version history."""
 
         # 1. AUTHENTICATION
         auth_data = _get_user_from_request(request)
@@ -531,9 +531,9 @@ This note was saved directly from a chat session.
             
             note_filename = f"notes/note_{message_id}.md"
 
-            # 4. ORCHESTRATE: CALL FILESYSTEM & CHROMA
+            # 4. ORCHESTRATE: CALL FILESYSTEM → CHROMA → GIT_SERVER (The Full Workflow)
             
-            # --- A: Save the human-readable .md file ---
+            # --- Step 4.A: Save the human-readable .md file ---
             filesystem_url = os.getenv('FILESYSTEM_SERVER_URL', 'http://localhost:5003')
             save_payload = {
                 "project_id": project_id,
@@ -541,36 +541,66 @@ This note was saved directly from a chat session.
                 "file_path": note_filename,
                 "content": note_content
             }
+            file_save_success = False
             try:
                 save_resp = requests.post(f"{filesystem_url}/save_file", json=save_payload, timeout=10)
                 save_resp.raise_for_status()
                 logger.info(f"Note saved to filesystem: {note_filename}")
+                file_save_success = True
             except Exception as e:
-                logger.warning(f"Could not save note to filesystem: {e}. Continuing with KB ingest only.")
+                logger.warning(f"Could not save note to filesystem: {e}. Continuing with KB ingest.")
             
-            # --- B: Ingest the note into the AI's knowledge base ---
+            # --- Step 4.B: Ingest the note into the AI's knowledge base (Vector DB) ---
             chroma_url = os.getenv('CHROMA_SERVER_URL', 'http://localhost:5001')
             ingest_payload = {
                 "collection_name": f"project_{project_id}",
                 "documents": [note_content],
-                "metadatas": [{"source_file": note_filename, "type": "saved_note"}],
+                "metadatas": [{"source_file": note_filename, "type": "saved_note", "created_by": user_id}],
                 "ids": [message_id]
             }
+            vector_ingest_success = False
             try:
                 ingest_resp = requests.post(f"{chroma_url}/add", json=ingest_payload, timeout=10)
                 ingest_resp.raise_for_status()
                 logger.info(f"Note ingested into KB for project {project_id}: {message_id}")
-                ingest_status = "success"
+                vector_ingest_success = True
             except Exception as e:
                 logger.warning(f"Could not ingest note into KB: {e}")
-                ingest_status = "warning"
             
-            logger.info(f"User {user_id} saved message {message_id} as note in project {project_id}.")
+            # --- Step 4.C: Commit to project's version history (Git Graph) ---
+            git_url = os.getenv('GIT_SERVER_URL', 'http://localhost:5004')
+            snapshot_payload = {
+                "project_id": project_id,
+                "user_id": user_id,
+                "message": f"Add saved chat note: {note_filename}",
+                "description": f"User {user_id} saved a chat response as a note.\n\nPrompt: {turn_data['user_query'][:100]}...\n\nMessage ID: {message_id}"
+            }
+            graph_snapshot_success = False
+            graph_status = "warning"
+            try:
+                snapshot_resp = requests.post(f"{git_url}/snapshot", json=snapshot_payload, timeout=10)
+                snapshot_resp.raise_for_status()
+                logger.info(f"Note committed to project history: {project_id}")
+                graph_snapshot_success = True
+                graph_status = "success"
+            except Exception as e:
+                logger.warning(f"Could not commit note to project history: {e}. Note still saved and indexed.")
+            
+            # Determine overall status
+            if file_save_success and vector_ingest_success and graph_snapshot_success:
+                overall_status = "success"
+            elif file_save_success and vector_ingest_success:
+                overall_status = "partial_success"  # File and vector OK, but graph commit failed
+            else:
+                overall_status = "partial_success"  # Some operations succeeded
+            
+            logger.info(f"User {user_id} saved message {message_id} as note in project {project_id}. "
+                       f"Status: file={file_save_success}, vector={vector_ingest_success}, graph={graph_snapshot_success}")
 
             return {
-                "status": "success",
+                "status": overall_status,
                 "note_path": note_filename,
-                "ingest_status": ingest_status
+                "ingest_status": graph_status
             }, 201
 
         except Exception as e:
