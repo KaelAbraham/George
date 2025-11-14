@@ -2,6 +2,7 @@ from flask import Blueprint, render_template, abort, request, current_app, jsoni
 from ..auth.auth_client import verify_firebase_token
 from ..backend_client import backend_client
 import logging
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,15 @@ def chat_interface(project_id):
         # Get user info from the decorator
         user_info = request.user
         
+        # Generate a session ID and get initial chat history
+        session_id = str(uuid.uuid4())
+        chat_history = []  # Start with empty history; frontend will load via API
+        
         return render_template('chat.html', 
-                             project=project, 
                              project_id=project_id,
+                             session_id=session_id,
+                             chat_history=chat_history,
+                             project=project,
                              project_name=project.get('name', project_id),
                              user=user_info)
     except Exception as e:
