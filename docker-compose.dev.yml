@@ -1,0 +1,130 @@
+version: "3.9"
+
+services:
+
+  ############################################################
+  # FRONTEND — Vite Dev Server with Hot Reload
+  ############################################################
+  frontend:
+    image: node:20
+    working_dir: /app
+    command: ["npm", "run", "dev", "--", "--host"]
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+    environment:
+      - VITE_BACKEND_URL=http://localhost:5000/v1/api
+    depends_on:
+      - backend
+    networks:
+      - caudexnet
+
+  ############################################################
+  # BACKEND — Flask Brain Service (Public API)
+  ############################################################
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    command: flask --app app.py run --host=0.0.0.0 --port=5000 --reload
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend:/app
+    environment:
+      - FLASK_ENV=development
+      - PYTHONUNBUFFERED=1
+      - AUTH_SERVER_URL=http://auth:6001
+      - FILESYSTEM_SERVER_URL=http://filesystem:6002
+      - CHROMA_SERVER_URL=http://chroma:6003
+      - BILLING_SERVER_URL=http://billing:6004
+      - GIT_SERVER_URL=http://git:6005
+    depends_on:
+      - auth
+      - filesystem
+      - chroma
+      - billing
+      - git
+    networks:
+      - caudexnet
+
+  ############################################################
+  # HAND SERVICES — Internal Only, Accessible Only to Backend
+  ############################################################
+
+  auth:
+    build:
+      context: ./auth_server
+      dockerfile: Dockerfile
+    command: python app.py
+    expose:
+      - "6001"
+    environment:
+      - FLASK_ENV=development
+      - PYTHONUNBUFFERED=1
+    networks:
+      - caudexnet
+
+  filesystem:
+    build:
+      context: ./filesystem_server
+      dockerfile: Dockerfile
+    command: python app.py
+    expose:
+      - "6002"
+    environment:
+      - FLASK_ENV=development
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./filesystem_server/uploads:/app/uploads
+      - ./filesystem_server/projects:/app/projects
+    networks:
+      - caudexnet
+
+  chroma:
+    build:
+      context: ./chroma_server
+      dockerfile: Dockerfile
+    command: python app.py
+    expose:
+      - "6003"
+    environment:
+      - FLASK_ENV=development
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./chroma_server/data:/app/data
+    networks:
+      - caudexnet
+
+  billing:
+    build:
+      context: ./billing_server
+      dockerfile: Dockerfile
+    command: python app.py
+    expose:
+      - "6004"
+    environment:
+      - FLASK_ENV=development
+      - PYTHONUNBUFFERED=1
+    networks:
+      - caudexnet
+
+  git:
+    build:
+      context: ./git_server
+      dockerfile: Dockerfile
+    command: python app.py
+    expose:
+      - "6005"
+    environment:
+      - FLASK_ENV=development
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./git_server/projects:/app/projects
+    networks:
+      - caudexnet
+
+networks:
+  caudexnet:
+    driver: bridge
