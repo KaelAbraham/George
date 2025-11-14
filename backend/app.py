@@ -268,6 +268,28 @@ class SaveNoteResponseSchema(ma.Schema):
     note_path = ma.fields.Str()
     ingest_status = ma.fields.Str()
 
+class BookmarkRequestSchema(ma.Schema):
+    """Request schema for bookmarking a chat message."""
+    is_bookmarked = ma.fields.Bool(required=True, description="Set to true to bookmark, false to unbookmark.")
+
+class BookmarkResponseSchema(ma.Schema):
+    """Response schema for bookmark operations."""
+    status = ma.fields.Str(description="'updated' on success")
+    message_id = ma.fields.Str(description="The message ID that was bookmarked")
+    is_bookmarked = ma.fields.Bool(description="The new bookmark state")
+
+class BookmarkListSchema(ma.Schema):
+    """Schema for a bookmarked message in the list."""
+    message_id = ma.fields.Str()
+    user_query = ma.fields.Str()
+    ai_response = ma.fields.Str()
+    timestamp = ma.fields.Str()
+    id = ma.fields.Int()
+
+class ProjectBookmarksSchema(ma.Schema):
+    """Response schema for getting all bookmarks in a project."""
+    bookmarks = ma.fields.List(ma.fields.Nested(BookmarkListSchema))
+
 # --- Core Chat Endpoint (Migrated to flask-smorest) ---
 
 @blp_chat.route('/chat')
@@ -424,6 +446,15 @@ class Chat(MethodView):
             # --- SAVE & RESPOND ---
             message_id = session_manager.add_turn(project_id, user_id, user_query, final_answer)
             
+            # --- QUEUE FOR ASYNC INGESTION ---
+            # Add to ingestion queue so the background worker will:
+            # - Save as markdown file to filesystem
+            # - Index in Chroma for semantic search
+            # - Commit to Git for versioning
+            # This keeps the chat fast while ensuring the Story Bible is eventually consistent
+            session_manager.add_to_ingestion_queue(message_id, project_id, user_id)
+            logger.info(f"Message {message_id} queued for async ingestion (file→vector→graph)")
+            
             # Calculate final balance, handling billing server failure
             final_balance = None
             if not billing_server_failed:
@@ -490,122 +521,88 @@ class Feedback(MethodView):
 
 
 @blp_chat.route('/chat/<string:message_id>/save_as_note')
-class SaveChatNote(MethodView):
-    """Saves a specific chat turn as a note in the project's knowledge base."""
+@blp_chat.route('/chat/<string:message_id>/bookmark')
+class BookmarkChat(MethodView):
+    """Bookmarks a specific chat message for the Notes section."""
 
     @blp_chat.doc(
-        description="Saves a specific prompt/response pair as a new 'note' file in the project's file system, ingests it into the knowledge base, and commits it to the project's version history.",
-        summary="Save a chat turn as a project note (file + vector + graph)."
+        description="Toggles the bookmark status for a specific chat message. Bookmarked messages appear in the Story Bible Notes section.",
+        summary="Bookmark or unbookmark a chat message."
     )
-    @blp_chat.response(201, SaveNoteResponseSchema)
-    def post(self, message_id):
-        """Save chat turn to notes, KB, and project version history."""
-
+    @blp_chat.arguments(BookmarkRequestSchema, location="json")
+    @blp_chat.response(200, BookmarkResponseSchema)
+    def post(self, data, message_id):
+        """Toggle bookmark status for a chat message."""
+        
         # 1. AUTHENTICATION
         auth_data = _get_user_from_request(request)
         if not auth_data or not auth_data['valid']:
             abort(401, message="Invalid or missing token")
-
+        
         user_id = auth_data['user_id']
-
+        is_bookmarked = data['is_bookmarked']
+        
         try:
-            # 2. GET CHAT DATA (Securely)
-            turn_data = session_manager.get_turn_by_id(message_id, user_id)
-
-            if not turn_data:
-                abort(404, message="Chat message not found or you do not have permission to access it.")
-
-            project_id = turn_data['project_id']
-
-            # 3. FORMAT THE NOTE (as Markdown)
-            note_content = f"""# Saved Chat Note ({datetime.now().strftime('%Y-%m-%d %H:%M')})
-
-This note was saved directly from a chat session.
-
-## User Prompt
-{turn_data['user_query']}
-
-## George's Response
-{turn_data['ai_response']}
-"""
+            # 2. UPDATE THE BOOKMARK FLAG IN THE DATABASE
+            success = session_manager.toggle_bookmark(
+                message_id=message_id,
+                user_id=user_id,
+                is_bookmarked=is_bookmarked
+            )
             
-            note_filename = f"notes/note_{message_id}.md"
-
-            # 4. ORCHESTRATE: CALL FILESYSTEM → CHROMA → GIT_SERVER (The Full Workflow)
+            if not success:
+                abort(404, message="Message not found or you do not have permission to bookmark it.")
             
-            # --- Step 4.A: Save the human-readable .md file ---
-            filesystem_url = os.getenv('FILESYSTEM_SERVER_URL', 'http://localhost:5003')
-            save_payload = {
-                "project_id": project_id,
-                "user_id": user_id,
-                "file_path": note_filename,
-                "content": note_content
-            }
-            file_save_success = False
-            try:
-                save_resp = requests.post(f"{filesystem_url}/save_file", json=save_payload, timeout=10)
-                save_resp.raise_for_status()
-                logger.info(f"Note saved to filesystem: {note_filename}")
-                file_save_success = True
-            except Exception as e:
-                logger.warning(f"Could not save note to filesystem: {e}. Continuing with KB ingest.")
+            logger.info(f"User {user_id} bookmarked message {message_id}: {is_bookmarked}")
             
-            # --- Step 4.B: Ingest the note into the AI's knowledge base (Vector DB) ---
-            chroma_url = os.getenv('CHROMA_SERVER_URL', 'http://localhost:5001')
-            ingest_payload = {
-                "collection_name": f"project_{project_id}",
-                "documents": [note_content],
-                "metadatas": [{"source_file": note_filename, "type": "saved_note", "created_by": user_id}],
-                "ids": [message_id]
-            }
-            vector_ingest_success = False
-            try:
-                ingest_resp = requests.post(f"{chroma_url}/add", json=ingest_payload, timeout=10)
-                ingest_resp.raise_for_status()
-                logger.info(f"Note ingested into KB for project {project_id}: {message_id}")
-                vector_ingest_success = True
-            except Exception as e:
-                logger.warning(f"Could not ingest note into KB: {e}")
-            
-            # --- Step 4.C: Commit to project's version history (Git Graph) ---
-            git_url = os.getenv('GIT_SERVER_URL', 'http://localhost:5004')
-            snapshot_payload = {
-                "project_id": project_id,
-                "user_id": user_id,
-                "message": f"Add saved chat note: {note_filename}",
-                "description": f"User {user_id} saved a chat response as a note.\n\nPrompt: {turn_data['user_query'][:100]}...\n\nMessage ID: {message_id}"
-            }
-            graph_snapshot_success = False
-            graph_status = "warning"
-            try:
-                snapshot_resp = requests.post(f"{git_url}/snapshot", json=snapshot_payload, timeout=10)
-                snapshot_resp.raise_for_status()
-                logger.info(f"Note committed to project history: {project_id}")
-                graph_snapshot_success = True
-                graph_status = "success"
-            except Exception as e:
-                logger.warning(f"Could not commit note to project history: {e}. Note still saved and indexed.")
-            
-            # Determine overall status
-            if file_save_success and vector_ingest_success and graph_snapshot_success:
-                overall_status = "success"
-            elif file_save_success and vector_ingest_success:
-                overall_status = "partial_success"  # File and vector OK, but graph commit failed
-            else:
-                overall_status = "partial_success"  # Some operations succeeded
-            
-            logger.info(f"User {user_id} saved message {message_id} as note in project {project_id}. "
-                       f"Status: file={file_save_success}, vector={vector_ingest_success}, graph={graph_snapshot_success}")
-
             return {
-                "status": overall_status,
-                "note_path": note_filename,
-                "ingest_status": graph_status
-            }, 201
-
+                "status": "updated",
+                "message_id": message_id,
+                "is_bookmarked": is_bookmarked
+            }, 200
+        
         except Exception as e:
-            logging.error(f"Failed to save note for message {message_id}: {e}", exc_info=True)
-            abort(500, message="Failed to save note. A microservice may be down.")
+            logging.error(f"Failed to bookmark message {message_id}: {e}", exc_info=True)
+            abort(500, message="Failed to update bookmark status.")
+
+# --- Project Bookmarks Endpoint ---
+
+@blp_chat.route('/project/<string:project_id>/bookmarks')
+class ProjectBookmarks(MethodView):
+    """Retrieves all bookmarked chat messages for a project (for the Story Bible Notes section)."""
+
+    @blp_chat.doc(
+        description="Returns all bookmarked chat messages for a project, ordered by recency. These appear in the Story Bible's Notes tab.",
+        summary="Get all bookmarked messages for a project."
+    )
+    @blp_chat.response(200, ProjectBookmarksSchema)
+    def get(self, project_id):
+        """Get all bookmarked messages for a project."""
+        
+        # 1. AUTHENTICATION
+        auth_data = _get_user_from_request(request)
+        if not auth_data or not auth_data['valid']:
+            abort(401, message="Invalid or missing token")
+        
+        user_id = auth_data['user_id']
+        
+        # 2. CHECK PERMISSION
+        if not _check_project_access(auth_data, project_id):
+            abort(403, message="You do not have permission to access this project.")
+        
+        try:
+            # 3. FETCH BOOKMARKS FROM SESSION MANAGER
+            bookmarks = session_manager.get_bookmarks_for_project(project_id, user_id)
+            
+            logger.info(f"User {user_id} retrieved {len(bookmarks)} bookmarks for project {project_id}")
+            
+            return {
+                "bookmarks": bookmarks
+            }, 200
+        
+        except Exception as e:
+            logging.error(f"Failed to retrieve bookmarks for project {project_id}: {e}", exc_info=True)
+            abort(500, message="Failed to retrieve bookmarks.")
 
 # --- Job/Report Endpoints ---
 

@@ -34,9 +34,10 @@ class SessionManager:
         return conn
 
     def _init_db(self):
-        """Creates the chat_history table if it doesn't exist."""
+        """Creates the chat_history, ingestion_queue, and bookmarks tables if they don't exist."""
         try:
             with self._get_conn() as conn:
+                # 1. Main chat history table
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS chat_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +46,7 @@ class SessionManager:
                         user_id TEXT NOT NULL,
                         role TEXT NOT NULL,
                         content TEXT NOT NULL,
+                        is_bookmarked INTEGER DEFAULT 0,
                         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
@@ -58,7 +60,38 @@ class SessionManager:
                     CREATE INDEX IF NOT EXISTS idx_message_id 
                     ON chat_history (message_id)
                 """)
+                # Index for bookmarked messages
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_bookmarked 
+                    ON chat_history (project_id, is_bookmarked, timestamp DESC)
+                """)
+                
+                # 2. Ingestion queue table (for background worker)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS ingestion_queue (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        message_id TEXT NOT NULL UNIQUE,
+                        project_id TEXT NOT NULL,
+                        user_id TEXT NOT NULL,
+                        status TEXT DEFAULT 'pending',
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        processed_at DATETIME,
+                        error_message TEXT
+                    )
+                """)
+                # Index for fast queue processing
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_queue_pending 
+                    ON ingestion_queue (status, created_at ASC)
+                """)
+                # Index for message lookups
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_queue_message 
+                    ON ingestion_queue (message_id)
+                """)
+                
                 conn.commit()
+                logger.info("Database tables initialized: chat_history, ingestion_queue")
         except Exception as e:
             logger.critical(f"Failed to initialize SessionManager database: {e}", exc_info=True)
             raise
@@ -234,3 +267,181 @@ class SessionManager:
             )
             conn.commit()
         logger.info(f"Cleared history for user {user_id} in project {project_id}")
+
+    def add_to_ingestion_queue(self, message_id: str, project_id: str, user_id: str) -> bool:
+        """
+        Adds a message_id to the ingestion queue for background processing.
+        The Ingestion Worker will pick this up and perform the File->Vector->Graph workflow.
+        
+        Args:
+            message_id (str): The unique message ID to ingest
+            project_id (str): The project context
+            user_id (str): The user who sent the message
+            
+        Returns:
+            bool: True if successfully queued, False if already in queue
+        """
+        try:
+            with self._get_conn() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO ingestion_queue (message_id, project_id, user_id, status)
+                    VALUES (?, ?, ?, 'pending')
+                    """,
+                    (message_id, project_id, user_id)
+                )
+                conn.commit()
+            logger.info(f"Added message {message_id} to ingestion queue")
+            return True
+        except sqlite3.IntegrityError:
+            logger.warning(f"Message {message_id} already in ingestion queue (skipping duplicate)")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to add message {message_id} to ingestion queue: {e}", exc_info=True)
+            return False
+
+    def get_pending_ingestions(self, limit: int = 10) -> List[Dict]:
+        """
+        Retrieves pending messages from the ingestion queue for the background worker.
+        
+        Args:
+            limit (int): Maximum number of messages to retrieve
+            
+        Returns:
+            List[Dict]: List of pending ingestion records with keys:
+                       message_id, project_id, user_id, id (queue record id)
+        """
+        try:
+            with self._get_conn() as conn:
+                cursor = conn.execute(
+                    """
+                    SELECT id, message_id, project_id, user_id
+                    FROM ingestion_queue
+                    WHERE status = 'pending'
+                    ORDER BY created_at ASC
+                    LIMIT ?
+                    """,
+                    (limit,)
+                )
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Failed to retrieve pending ingestions: {e}", exc_info=True)
+            return []
+
+    def mark_ingestion_complete(self, queue_id: int, status: str = 'complete', error_msg: str = None) -> bool:
+        """
+        Marks an ingestion queue record as processed.
+        
+        Args:
+            queue_id (int): The ID of the queue record
+            status (str): 'complete' or 'failed'
+            error_msg (str): Error message if failed
+            
+        Returns:
+            bool: True if updated successfully
+        """
+        try:
+            with self._get_conn() as conn:
+                conn.execute(
+                    """
+                    UPDATE ingestion_queue
+                    SET status = ?, processed_at = CURRENT_TIMESTAMP, error_message = ?
+                    WHERE id = ?
+                    """,
+                    (status, error_msg, queue_id)
+                )
+                conn.commit()
+            logger.info(f"Marked ingestion queue record {queue_id} as {status}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update ingestion queue: {e}", exc_info=True)
+            return False
+
+    def toggle_bookmark(self, message_id: str, user_id: str, is_bookmarked: bool) -> bool:
+        """
+        Toggles the bookmark status for a chat message.
+        
+        Args:
+            message_id (str): The unique message ID to bookmark
+            user_id (str): The user ID (for security verification)
+            is_bookmarked (bool): True to bookmark, False to unbookmark
+            
+        Returns:
+            bool: True if successful, False if message not found
+        """
+        try:
+            with self._get_conn() as conn:
+                # Verify message belongs to user
+                cur = conn.execute(
+                    """
+                    SELECT id FROM chat_history
+                    WHERE message_id = ? AND user_id = ? AND role = 'model'
+                    """,
+                    (message_id, user_id)
+                )
+                if not cur.fetchone():
+                    logger.warning(f"Cannot bookmark message {message_id}: not found or user mismatch")
+                    return False
+                
+                # Update bookmark flag
+                conn.execute(
+                    """
+                    UPDATE chat_history
+                    SET is_bookmarked = ?
+                    WHERE message_id = ? AND user_id = ?
+                    """,
+                    (1 if is_bookmarked else 0, message_id, user_id)
+                )
+                conn.commit()
+            logger.info(f"Toggled bookmark for message {message_id}: is_bookmarked={is_bookmarked}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to toggle bookmark for message {message_id}: {e}", exc_info=True)
+            return False
+
+    def get_bookmarks_for_project(self, project_id: str, user_id: str, limit: int = 50) -> List[Dict]:
+        """
+        Retrieves all bookmarked chat messages for a project (for the Notes section).
+        
+        Args:
+            project_id (str): The project ID
+            user_id (str): The user ID (for permission check)
+            limit (int): Maximum number of bookmarks to retrieve
+            
+        Returns:
+            List[Dict]: List of bookmarked messages with their context
+        """
+        try:
+            with self._get_conn() as conn:
+                cursor = conn.execute(
+                    """
+                    SELECT 
+                        ch_response.message_id,
+                        ch_response.content as ai_response,
+                        ch_user.content as user_query,
+                        ch_response.timestamp,
+                        ch_response.id
+                    FROM chat_history ch_response
+                    LEFT JOIN chat_history ch_user ON 
+                        ch_user.id = (
+                            SELECT MAX(id) FROM chat_history
+                            WHERE id < ch_response.id 
+                            AND project_id = ? 
+                            AND user_id = ? 
+                            AND role = 'user'
+                        )
+                    WHERE ch_response.project_id = ? 
+                    AND ch_response.user_id = ? 
+                    AND ch_response.role = 'model'
+                    AND ch_response.is_bookmarked = 1
+                    ORDER BY ch_response.timestamp DESC
+                    LIMIT ?
+                    """,
+                    (project_id, user_id, project_id, user_id, limit)
+                )
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Failed to retrieve bookmarks for project {project_id}: {e}", exc_info=True)
+            return []
