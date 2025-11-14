@@ -80,8 +80,9 @@ GIT_SERVER_URL = os.environ.get("GIT_SERVER_URL", "http://localhost:5003")
 
 
 # --- Constants ---
-PRO_MODEL_THRESHOLD = 0.50  # 50 cents minimum balance to use Pro model
-WIKI_JOB_MIN_BALANCE = 1.00  # $1.00 minimum balance to start a wiki job
+# 100 Credits = 1 Cent ($0.01) | 10,000 Credits = $1.00
+PRO_MODEL_THRESHOLD_CREDITS = 5000  # 5000 Credits ($0.50)
+WIKI_JOB_MIN_BALANCE_CREDITS = 10000  # 10000 Credits ($1.00)
 
 # --- Initialize Clients & Managers ---
 try:
@@ -385,16 +386,16 @@ class Chat(MethodView):
                 # A) Billing server failed (fail-open principle)
                 # B) Billing server succeeded AND balance is sufficient
                 
-                if billing_server_failed or user_balance >= PRO_MODEL_THRESHOLD:
+                if billing_server_failed or user_balance >= PRO_MODEL_THRESHOLD_CREDITS:
                     model_to_use = answer_client_pro
                     if billing_server_failed:
                         logger.info(f"User {user_id}: Using PRO model (Billing server failed, fail-open).")
                     else:
-                        logger.info(f"User {user_id} has ${user_balance:.2f}. Using PRO model.")
+                        logger.info(f"User {user_id} has {user_balance} Credits. Using PRO model.")
                 else:
                     # This 'else' block now only runs if billing succeeded AND balance is low
                     downgrade_flag = True
-                    logger.info(f"User {user_id} has ${user_balance:.2f}. Downgrading to FLASH.")
+                    logger.info(f"User {user_id} has {user_balance} Credits. Downgrading to FLASH.")
             elif user_role == 'guest' and intent == 'complex_analysis':
                  downgrade_flag = True  # Guests are always "downgraded" for complex tasks
                  logger.info(f"User {user_id} is a GUEST. Forcing FLASH model for complex task.")
@@ -455,19 +456,23 @@ class Chat(MethodView):
             session_manager.add_to_ingestion_queue(message_id, project_id, user_id)
             logger.info(f"Message {message_id} queued for async ingestion (file→vector→graph)")
             
+            # Convert dollar cost to Credits
+            call_cost_credits = int(call_cost * 10000)
+            
             # Calculate final balance, handling billing server failure
-            final_balance = None
+            final_balance_credits = None
             if not billing_server_failed:
-                final_balance = user_balance - call_cost
+                # user_balance is already in Credits
+                final_balance_credits = user_balance - call_cost_credits
                 
             # Return dict; flask-smorest handles JSON serialization via ChatResponseSchema
             return {
                 "message_id": message_id,
                 "response": final_answer,
                 "intent": intent,
-                "cost": call_cost,
+                "cost": call_cost_credits,      # Now in Credits
                 "downgraded": downgrade_flag,
-                "balance": final_balance
+                "balance": final_balance_credits # Now in Credits (or null)
             }
 
         except Exception as e:
@@ -773,10 +778,12 @@ class GenerateWiki(MethodView):
         user_id = auth_data['user_id']
         
         # 1. Check API pool balance BEFORE starting the job
-        user_balance = get_user_balance(user_id)
-        if user_balance < WIKI_JOB_MIN_BALANCE:
-            logger.warning(f"User {user_id} tried to start wiki job with insufficient balance (${user_balance:.2f}).")
-            abort(402, message=f"Insufficient balance. This report requires a minimum balance of ${WIKI_JOB_MIN_BALANCE:.2f}.")
+        user_balance_credits = get_user_balance(user_id)  # Now returns Credits
+        
+        if user_balance_credits is None or user_balance_credits < WIKI_JOB_MIN_BALANCE_CREDITS:
+            actual_balance = user_balance_credits if user_balance_credits is not None else 0
+            logger.warning(f"User {user_id} tried to start wiki job with insufficient balance ({actual_balance} Credits).")
+            abort(402, message=f"Insufficient balance. This report requires a minimum balance of {WIKI_JOB_MIN_BALANCE_CREDITS} Credits.")
         
         # 2. Create the job "receipt"
         job_id = job_manager.create_job(
@@ -864,12 +871,12 @@ def _check_project_access(auth_data: Dict, project_id: str) -> bool:
         return True
     return False
 
-def get_user_balance(user_id: str) -> Optional[float]:
+def get_user_balance(user_id: str) -> Optional[int]:
     """
-    Gets the user's current API pool balance.
+    Gets the user's current API pool balance in Credits.
     
     Returns:
-        float: The user's balance on success.
+        int: The user's balance in Credits on success.
         None: On any failure (e.g., connection error, non-200 status).
               This signals the frontend and internal logic to fail-open.
     """
@@ -879,7 +886,9 @@ def get_user_balance(user_id: str) -> Optional[float]:
             timeout=5
         )
         if resp.status_code == 200:
-            return float(resp.json().get('balance', 0.0))
+            dollar_balance = float(resp.json().get('balance', 0.0))
+            # Convert dollars to Credits (10,000 Credits = $1.00)
+            return int(dollar_balance * 10000)
         
         # Log non-200 status as a warning
         logging.warning(f"Billing server returned non-200 status ({resp.status_code}) for user {user_id}: {resp.text}")
