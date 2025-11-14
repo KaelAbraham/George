@@ -395,6 +395,56 @@ def get_file_content(project_id, file_name):
         logger.error(f"Error in /get_file_content proxy: {e}", exc_info=True)
         return jsonify({"error": "File service is unavailable"}), 503
 
+# --- File Upload Proxy Route ---
+
+@app.route('/v1/api/project/<project_id>/upload', methods=['POST'])
+def proxy_file_upload(project_id):
+    """
+    [AUTH] Proxies a file upload to the filesystem_server.
+    Receives a file from the frontend and forwards it to the internal filesystem_server.
+    The filesystem_server handles saving the original and creating markdown conversion.
+    """
+    # 1. AUTHENTICATION (User must be logged in)
+    auth_data = _get_user_from_request(request)
+    if not auth_data or not auth_data.get('valid'):
+        return jsonify({"error": "Invalid or missing token"}), 401
+
+    # 2. PERMISSION CHECK (User must own this project)
+    # (You can add your project access logic here if needed)
+    
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided in request"}), 400
+    
+    file = request.files['file']
+    if not file or file.filename == '':
+        return jsonify({"error": "No file selected"}), 400
+
+    try:
+        # 3. FORWARD THE FILE to filesystem_server
+        # Stream the file to the internal service
+        files = {'file': (file.filename, file.stream, file.content_type)}
+        
+        resp = requests.post(
+            f"{FILESYSTEM_SERVER_URL}/projects/{project_id}/upload",
+            files=files,
+            timeout=30
+        )
+        resp.raise_for_status()
+
+        # 4. RETURN RESPONSE FROM FILESYSTEM_SERVER
+        return resp.json(), resp.status_code
+
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            return jsonify({"error": "Project not found"}), 404
+        elif e.response.status_code == 400:
+            return jsonify({"error": "Invalid file or project ID"}), 400
+        logger.error(f"Filesystem service error: {e.response.text if e.response else str(e)}")
+        return jsonify({"error": "File upload service error"}), 503
+    except Exception as e:
+        logger.error(f"Error in /upload proxy: {e}", exc_info=True)
+        return jsonify({"error": "File upload service is unavailable"}), 503
+
 # --- Core Chat Endpoint (Migrated to flask-smorest) ---
 
 @blp_chat.route('/chat')

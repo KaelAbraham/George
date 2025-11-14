@@ -2,12 +2,19 @@
 from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 import os
+import logging
+import subprocess
+import tempfile
 # --- UPDATED IMPORTS ---
 from services import DocumentParser, TextChunker, WebSanitizer, DocumentParserError
 import requests 
 import dataclasses 
 import uuid
 import json
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -36,6 +43,114 @@ def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def convert_to_markdown(input_path):
+    """
+    Converts a document (docx, pdf, odt, etc.) to Markdown format.
+    Returns the path to the converted .md file, or None if conversion fails.
+    Uses pandoc via pypandoc.
+    """
+    try:
+        import pypandoc
+    except ImportError:
+        logger.warning("pypandoc not installed, skipping conversion")
+        return None
+    
+    try:
+        # Generate output path (replace extension with .md)
+        base_name = os.path.splitext(input_path)[0]
+        output_path = f"{base_name}.md"
+        
+        # Use pandoc to convert
+        logger.info(f"Converting {input_path} to {output_path}")
+        pypandoc.convert_file(input_path, 'md', outputfile=output_path)
+        
+        if os.path.exists(output_path):
+            logger.info(f"Successfully converted to: {output_path}")
+            return output_path
+        else:
+            logger.error(f"Conversion succeeded but output file not found: {output_path}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error converting {input_path} to markdown: {e}", exc_info=True)
+        return None
+
+# --- NEW: FILE UPLOAD WITH CONVERSION ENDPOINT ---
+
+@app.route('/projects/<project_id>/upload', methods=['POST'])
+def upload_file_with_conversion(project_id):
+    """
+    [SIMPLE UPLOAD] Handles file upload, saves original, and creates .md conversion.
+    Returns file info and conversion status.
+    """
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided in request"}), 400
+    
+    file = request.files['file']
+    if not file or file.filename == '':
+        return jsonify({"error": "No file selected"}), 400
+    
+    if not project_id:
+        return jsonify({"error": "Project ID is required"}), 400
+    
+    if not allowed_file(file.filename):
+        return jsonify({"error": f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"}), 400
+    
+    try:
+        # Create project directory if it doesn't exist
+        project_path = os.path.join(app.config['PROJECTS_FOLDER'], project_id)
+        os.makedirs(project_path, exist_ok=True)
+        
+        # Secure the filename
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(project_path, filename)
+        
+        # Save the original file
+        logger.info(f"[{project_id}] Saving file: {filename}")
+        file.save(file_path)
+        
+        result = {
+            'project_id': project_id,
+            'original_file': filename,
+            'original_path': file_path,
+            'conversion': {
+                'attempted': False,
+                'success': False,
+                'markdown_file': None,
+                'markdown_path': None
+            }
+        }
+        
+        # Check if file needs conversion to markdown
+        file_ext = os.path.splitext(filename)[1].lower()
+        
+        # Convert docx, pdf, odt to markdown (skip txt and md as they don't need conversion)
+        if file_ext in ['.docx', '.pdf', '.odt']:
+            result['conversion']['attempted'] = True
+            logger.info(f"[{project_id}] Converting {filename} to markdown")
+            
+            markdown_path = convert_to_markdown(file_path)
+            if markdown_path:
+                markdown_filename = os.path.basename(markdown_path)
+                result['conversion']['success'] = True
+                result['conversion']['markdown_file'] = markdown_filename
+                result['conversion']['markdown_path'] = markdown_path
+                logger.info(f"[{project_id}] Conversion successful: {markdown_filename}")
+            else:
+                logger.warning(f"[{project_id}] Conversion failed for {filename}")
+        
+        return jsonify({
+            'message': 'File uploaded successfully',
+            'success': True,
+            **result
+        }), 201
+        
+    except Exception as e:
+        logger.error(f"Error in /projects/{project_id}/upload: {e}", exc_info=True)
+        return jsonify({"error": f"File upload failed: {str(e)}"}), 500
+
+# --- EXISTING: UPLOAD/PROCESSING ENDPOINT (for chroma integration) ---
+
 @app.route('/upload/<project_id>', methods=['POST'])
 def upload_file(project_id):
     """
@@ -43,47 +158,55 @@ def upload_file(project_id):
     and forwards chunks to the chroma-core server.
     """
     if 'manuscript' not in request.files:
-# ... (existing code) ...
+        return jsonify({"error": "No manuscript file provided"}), 400
+        
+    file = request.files['manuscript']
+    filename = secure_filename(file.filename) if file else None
+    
     if not project_id:
         return jsonify({"error": "Project ID is required"}), 400
 
     if file and allowed_file(file.filename):
-# ... (existing code) ...
         project_path = os.path.join(app.config['PROJECTS_FOLDER'], project_id)
         os.makedirs(project_path, exist_ok=True)
         
         upload_path = os.path.join(project_path, filename)
-# ... (existing code) ...
+        file.save(upload_path)
 
         try:
             # 1. Parse File
             parsed_data = parser.parse(upload_path)
-# ... (existing code) ...
             
             # 2. Chunk Text
             # We'll use the filename as the chapter for now
             chapter_name = os.path.splitext(filename)[0]
-# ... (existing code) ...
+            chunks = chunker.chunk_text(parsed_data['content'], chapter=chapter_name)
             
             # 3. Hand-off to Chroma-Core Server
             
             # Convert list of TextChunk dataclasses to plain dicts for JSON
             chunk_dicts = []
-# ... (existing code) ...
+            for i, chunk in enumerate(chunks):
                 chunk_data = dataclasses.asdict(chunk)
                 # Create a metadata dict for Chroma
                 chroma_metadata = {
-# ... (existing code) ...
+                    "source_file": chunk.source_file,
+                    "chapter": chunk.chapter,
+                    "paragraph_start": chunk.paragraph_start,
+                    "paragraph_end": chunk.paragraph_end,
+                    "character_start": chunk.character_start,
                     "character_end": chunk.character_end
                 }
                 # Add the text and metadata to our list
                 chunk_dicts.append({
-# ... (existing code) ...
+                    "text": chunk.text,
+                    "metadata": chroma_metadata,
                     "id": f"{project_id}_{filename}_{i}" # Create a unique ID
                 })
 
             collection_name = f"project_{project_id}"
-# ... (existing code) ...
+            payload = {
+                "collection_name": collection_name,
                 "chunks": chunk_dicts
             }
             
@@ -91,7 +214,8 @@ def upload_file(project_id):
             try:
                 requests.post(
                     f"{CHROMA_SERVER_URL}/create_collection",
-# ... (existing code) ...
+                    json={"collection_name": collection_name},
+                    timeout=10
                 ).raise_for_status()
             except requests.exceptions.RequestException as e:
                 # We can ignore errors if collection already exists, but log others
@@ -103,18 +227,22 @@ def upload_file(project_id):
 
             # This is the MCP "protocol" in action:
             response = requests.post(
-# ... (existing code) ...
+                f"{CHROMA_SERVER_URL}/add_chunks",
+                json=payload,
+                timeout=60
+            )
             response.raise_for_status() # Raise an error if chroma-core fails
             
             return jsonify({
                 'message': 'File uploaded and processed successfully',
-# ... (existing code) ...
+                'chunk_count': len(chunk_dicts),
+                'filename': filename
             }), 201
             
         except DocumentParserError as e:
             return jsonify({'error': str(e)}), 500
         except requests.exceptions.RequestException as e:
-# ... (existing code) ...
+            app.logger.error(f"Failed to hand off chunks to chroma-core: {e}")
             return jsonify({"error": f"File processed, but indexing service failed: {e.response.text if e.response else 'No response'}"}), 502
         except Exception as e:
             app.logger.error(f"An unexpected error occurred: {e}", exc_info=True)
@@ -261,32 +389,33 @@ def confirm_url_import():
 
 @app.route('/project/<project_id>/files', methods=['GET'])
 def list_files(project_id):
-# ... (existing code) ...
+    """List all files in a project."""
     project_path = os.path.join(app.config['PROJECTS_FOLDER'], project_id)
     if not os.path.isdir(project_path):
         return jsonify({'error': 'Project not found'}), 404
-# ... (existing code) ...
     
     files = [f for f in os.listdir(project_path) if os.path.isfile(os.path.join(project_path, f))]
     return jsonify({'project_id': project_id, 'files': files})
 
 @app.route('/file/<project_id>/<filename>', methods=['GET'])
 def get_file_content(project_id, filename):
-# ... (existing code) ...
+    """Get file content from a project."""
+    project_path = os.path.join(app.config['PROJECTS_FOLDER'], project_id)
     file_path = os.path.join(project_path, filename)
     
     if not os.path.isfile(file_path):
-# ... (existing code) ...
+        return jsonify({'error': 'File not found'}), 404
         
     try:
         parsed_data = parser.parse(file_path)
-# ... (existing code) ...
+        return jsonify({
+            'project_id': project_id,
             'filename': filename,
             'content': parsed_data['content'],
             'metadata': parsed_data.get('metadata', {})
-# ... (existing code) ...
+        })
     except DocumentParserError as e:
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5001)
+    app.run(debug=True, port=6002)
