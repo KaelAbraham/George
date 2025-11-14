@@ -3,10 +3,21 @@ Could not import EntityExtractor from akg.core
 CRITICAL:root:WARNING: Could not import llm_integration from backend.
 WARNING:root:Could not import read_manuscript_file from parsers module. Using file read fallback.
 ERROR:knowledge_extraction.profile_editor:Could not import GeorgeAI from llm_integration
-WARNING:root:KnowledgeExtractor skipped - requires GeorgeAI (not available)
-ERROR:root:CRITICAL: Prompt file 'ai_router_v4.txt' not found.
-ERROR:root:CRITICAL: Prompt file 'coreference_resolution.txt' not found.
-ERROR:root:CRITICAL: Prompt file 'george_polish.txt' not found.
+CRITICAL:session_manager:Failed to initialize SessionManager database: no such column: message_id
+Traceback (most recent call last):
+  File "C:\Users\kael_\George\backend\session_manager.py", line 57, in _init_db
+    conn.execute("""
+sqlite3.OperationalError: no such column: message_id
+CRITICAL:root:Failed to initialize clients: no such column: message_id
+Traceback (most recent call last):
+  File "C:\Users\kael_\George\backend\app.py", line 105, in <module>
+    session_manager = SessionManager()
+                      ^^^^^^^^^^^^^^^^
+  File "C:\Users\kael_\George\backend\session_manager.py", line 27, in __init__
+    self._init_db()
+  File "C:\Users\kael_\George\backend\session_manager.py", line 57, in _init_db
+    conn.execute("""
+sqlite3.OperationalError: no such column: message_id
 INFO:werkzeug:[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
  * Running on http://127.0.0.1:5000
 INFO:werkzeug:[33mPress CTRL+C to quit[0m
@@ -16,10 +27,21 @@ Could not import EntityExtractor from akg.core
 CRITICAL:root:WARNING: Could not import llm_integration from backend.
 WARNING:root:Could not import read_manuscript_file from parsers module. Using file read fallback.
 ERROR:knowledge_extraction.profile_editor:Could not import GeorgeAI from llm_integration
-WARNING:root:KnowledgeExtractor skipped - requires GeorgeAI (not available)
-ERROR:root:CRITICAL: Prompt file 'ai_router_v4.txt' not found.
-ERROR:root:CRITICAL: Prompt file 'coreference_resolution.txt' not found.
-ERROR:root:CRITICAL: Prompt file 'george_polish.txt' not found.
+CRITICAL:session_manager:Failed to initialize SessionManager database: no such column: message_id
+Traceback (most recent call last):
+  File "C:\Users\kael_\George\backend\session_manager.py", line 57, in _init_db
+    conn.execute("""
+sqlite3.OperationalError: no such column: message_id
+CRITICAL:root:Failed to initialize clients: no such column: message_id
+Traceback (most recent call last):
+  File "C:\Users\kael_\George\backend\app.py", line 105, in <module>
+    session_manager = SessionManager()
+                      ^^^^^^^^^^^^^^^^
+  File "C:\Users\kael_\George\backend\session_manager.py", line 27, in __init__
+    self._init_db()
+  File "C:\Users\kael_\George\backend\session_manager.py", line 57, in _init_db
+    conn.execute("""
+sqlite3.OperationalError: no such column: message_id
 WARNING:werkzeug: * Debugger is active!
 INFO:werkzeug: * Debugger PIN: 114-271-244
-INFO:werkzeug: * Detected change in 'C:\\Users\\kael_\\George\\backend\\app.py', reloading
+INFO:werkzeug: * Detected change in 'C:\\Users\\kael_\\George\\backend\\session_manager.py', reloading

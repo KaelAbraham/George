@@ -18,6 +18,7 @@ from flask_cors import CORS
 from llm_client import GeminiClient, MultiModelCostAggregator
 from session_manager import SessionManager
 from job_manager import JobManager
+from feedback_manager import FeedbackManager
 # This is your premium report/wiki generator
 try:
     from knowledge_extraction.orchestrator import KnowledgeExtractor as KnowledgeExtractionOrchestrator
@@ -103,6 +104,7 @@ try:
     # Initialize our new foundational services
     session_manager = SessionManager()
     job_manager = JobManager()
+    feedback_manager = FeedbackManager()
     
     # Initialize orchestrator only if import succeeded AND all dependencies available
     if KnowledgeExtractionOrchestrator:
@@ -211,6 +213,7 @@ class ChatRequestSchema(ma.Schema):
 
 class ChatResponseSchema(ma.Schema):
     """Response schema for successful chat responses."""
+    message_id = ma.fields.Str()
     response = ma.fields.Str()
     intent = ma.fields.Str()
     cost = ma.fields.Float()
@@ -247,7 +250,17 @@ class WikiGenerationResponseSchema(ma.Schema):
     job_id = ma.fields.Str()
     status_url = ma.fields.Str()
 
-# --- Route Definitions (Must be BEFORE blueprint registration) ---
+class FeedbackRequestSchema(ma.Schema):
+    """Request schema for POST /feedback endpoint."""
+    message_id = ma.fields.Str(required=True)
+    rating = ma.fields.Int(required=True)
+    category = ma.fields.Str(allow_none=True)
+    comment = ma.fields.Str(allow_none=True)
+
+class FeedbackResponseSchema(ma.Schema):
+    """Response schema for successful feedback submission."""
+    status = ma.fields.Str()
+    feedback_id = ma.fields.Str()
 
 # --- Core Chat Endpoint (Migrated to flask-smorest) ---
 
@@ -403,7 +416,7 @@ class Chat(MethodView):
             final_answer = polish_result['response']
             
             # --- SAVE & RESPOND ---
-            session_manager.add_turn(project_id, user_id, user_query, final_answer)
+            message_id = session_manager.add_turn(project_id, user_id, user_query, final_answer)
             
             # Calculate final balance, handling billing server failure
             final_balance = None
@@ -412,6 +425,7 @@ class Chat(MethodView):
                 
             # Return dict; flask-smorest handles JSON serialization via ChatResponseSchema
             return {
+                "message_id": message_id,
                 "response": final_answer,
                 "intent": intent,
                 "cost": call_cost,
@@ -422,6 +436,51 @@ class Chat(MethodView):
         except Exception as e:
             logging.error(f"Critical error in /chat: {e}", exc_info=True)
             abort(500, message="An internal server error occurred.")
+
+# --- Feedback Endpoint ---
+
+@blp_chat.route('/feedback')
+class Feedback(MethodView):
+    """Submit feedback for a specific chat message."""
+
+    @blp_chat.doc(
+        description="Allows a user to submit feedback (good/bad, category, comment) for a specific chat message.",
+        summary="Submit chat feedback."
+    )
+    @blp_chat.arguments(FeedbackRequestSchema, location="json")
+    @blp_chat.response(201, FeedbackResponseSchema)
+    def post(self, data):
+        """Submit feedback for a chat message."""
+
+        # 1. AUTHENTICATION
+        auth_data = _get_user_from_request(request)
+        if not auth_data or not auth_data['valid']:
+            abort(401, message="Invalid or missing token")
+
+        user_id = auth_data['user_id']
+        feedback_id = f"fbk_{uuid.uuid4()}"
+
+        try:
+            # 2. SAVE FEEDBACK
+            feedback_manager.save_feedback(
+                feedback_id=feedback_id,
+                message_id=data['message_id'],
+                user_id=user_id,
+                rating=data['rating'],
+                category=data.get('category'),
+                comment=data.get('comment')
+            )
+
+            logger.info(f"Feedback {feedback_id} received from user {user_id} for message {data['message_id']}.")
+
+            return {
+                "status": "success",
+                "feedback_id": feedback_id
+            }
+
+        except Exception as e:
+            logging.error(f"Critical error in /feedback: {e}", exc_info=True)
+            abort(500, message="An internal server error occurred while saving feedback.")
 
 # --- Job/Report Endpoints ---
 

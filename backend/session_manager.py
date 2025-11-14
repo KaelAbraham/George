@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import logging
+import uuid
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional, Any
@@ -39,6 +40,7 @@ class SessionManager:
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS chat_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        message_id TEXT,
                         project_id TEXT NOT NULL,
                         user_id TEXT NOT NULL,
                         role TEXT NOT NULL,
@@ -51,12 +53,17 @@ class SessionManager:
                     CREATE INDEX IF NOT EXISTS idx_chat_history_lookup 
                     ON chat_history (project_id, user_id, timestamp DESC)
                 """)
+                # Index for message_id lookups
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_message_id 
+                    ON chat_history (message_id)
+                """)
                 conn.commit()
         except Exception as e:
             logger.critical(f"Failed to initialize SessionManager database: {e}", exc_info=True)
             raise
 
-    def add_turn(self, project_id: str, user_id: str, user_message: str, george_response: str):
+    def add_turn(self, project_id: str, user_id: str, user_message: str, george_response: str) -> str:
         """
         Saves a complete conversation turn (User Query + George Response).
         
@@ -65,23 +72,31 @@ class SessionManager:
             user_id (str): The ID of the user chatting.
             user_message (str): The text the user typed.
             george_response (str): The final text George replied with.
+            
+        Returns:
+            str: The unique message_id for the AI response (used for feedback tracking)
         """
         try:
+            # Generate a unique ID for the AI response message
+            message_id = f"msg_{uuid.uuid4()}"
+            
             with self._get_conn() as conn:
-                # 1. Insert User Message
+                # 1. Insert User Message (no message_id for user messages)
                 conn.execute(
                     "INSERT INTO chat_history (project_id, user_id, role, content) VALUES (?, ?, ?, ?)",
                     (project_id, user_id, "user", user_message)
                 )
-                # 2. Insert George's Response
+                # 2. Insert George's Response with message_id
                 conn.execute(
-                    "INSERT INTO chat_history (project_id, user_id, role, content) VALUES (?, ?, ?, ?)",
-                    (project_id, user_id, "model", george_response)
+                    "INSERT INTO chat_history (message_id, project_id, user_id, role, content) VALUES (?, ?, ?, ?, ?)",
+                    (message_id, project_id, user_id, "model", george_response)
                 )
                 conn.commit()
-            logger.debug(f"Saved chat turn for user {user_id} in project {project_id}")
+            logger.debug(f"Saved chat turn for user {user_id} in project {project_id} with message_id {message_id}")
+            return message_id
         except Exception as e:
             logger.error(f"Failed to save chat turn: {e}", exc_info=True)
+            raise
 
     def get_recent_history(self, project_id: str, user_id: str, limit: int = 6) -> List[Dict[str, str]]:
         """
