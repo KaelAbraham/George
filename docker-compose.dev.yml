@@ -32,6 +32,7 @@ services:
       - "5000:5000"
     volumes:
       - ./backend:/app
+      - ./persistent_data/backend:/app/backend/data
     environment:
       - FLASK_ENV=development
       - PYTHONUNBUFFERED=1
@@ -60,6 +61,8 @@ services:
     command: python app.py
     expose:
       - "6001"
+    volumes:
+      - ./persistent_data/auth:/app/data
     environment:
       - FLASK_ENV=development
       - PYTHONUNBUFFERED=1
