@@ -3,6 +3,3 @@ Ensure all microservices (Auth, Billing, Chroma, Filesystem, Git) are running.
 Running on http://localhost:5000
  * Serving Flask app 'app'
  * Debug mode: on
---- Caudex Pro AI Router (The Brain) ---
-Ensure all microservices (Auth, Billing, Chroma, Filesystem, Git) are running.
-Running on http://localhost:5000

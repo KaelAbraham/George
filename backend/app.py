@@ -262,6 +262,12 @@ class FeedbackResponseSchema(ma.Schema):
     status = ma.fields.Str()
     feedback_id = ma.fields.Str()
 
+class SaveNoteResponseSchema(ma.Schema):
+    """Response schema for successful note saving."""
+    status = ma.fields.Str()
+    note_path = ma.fields.Str()
+    ingest_status = ma.fields.Str()
+
 # --- Core Chat Endpoint (Migrated to flask-smorest) ---
 
 @blp_chat.route('/chat')
@@ -481,6 +487,95 @@ class Feedback(MethodView):
         except Exception as e:
             logging.error(f"Critical error in /feedback: {e}", exc_info=True)
             abort(500, message="An internal server error occurred while saving feedback.")
+
+
+@blp_chat.route('/chat/<string:message_id>/save_as_note')
+class SaveChatNote(MethodView):
+    """Saves a specific chat turn as a note in the project's knowledge base."""
+
+    @blp_chat.doc(
+        description="Saves a specific prompt/response pair as a new 'note' file in the project's file system and ingests it into the knowledge base.",
+        summary="Save a chat turn as a project note."
+    )
+    @blp_chat.response(201, SaveNoteResponseSchema)
+    def post(self, message_id):
+        """Save chat turn to notes and KB."""
+
+        # 1. AUTHENTICATION
+        auth_data = _get_user_from_request(request)
+        if not auth_data or not auth_data['valid']:
+            abort(401, message="Invalid or missing token")
+
+        user_id = auth_data['user_id']
+
+        try:
+            # 2. GET CHAT DATA (Securely)
+            turn_data = session_manager.get_turn_by_id(message_id, user_id)
+
+            if not turn_data:
+                abort(404, message="Chat message not found or you do not have permission to access it.")
+
+            project_id = turn_data['project_id']
+
+            # 3. FORMAT THE NOTE (as Markdown)
+            note_content = f"""# Saved Chat Note ({datetime.now().strftime('%Y-%m-%d %H:%M')})
+
+This note was saved directly from a chat session.
+
+## User Prompt
+{turn_data['user_query']}
+
+## George's Response
+{turn_data['ai_response']}
+"""
+            
+            note_filename = f"notes/note_{message_id}.md"
+
+            # 4. ORCHESTRATE: CALL FILESYSTEM & CHROMA
+            
+            # --- A: Save the human-readable .md file ---
+            filesystem_url = os.getenv('FILESYSTEM_SERVER_URL', 'http://localhost:5003')
+            save_payload = {
+                "project_id": project_id,
+                "user_id": user_id,
+                "file_path": note_filename,
+                "content": note_content
+            }
+            try:
+                save_resp = requests.post(f"{filesystem_url}/save_file", json=save_payload, timeout=10)
+                save_resp.raise_for_status()
+                logger.info(f"Note saved to filesystem: {note_filename}")
+            except Exception as e:
+                logger.warning(f"Could not save note to filesystem: {e}. Continuing with KB ingest only.")
+            
+            # --- B: Ingest the note into the AI's knowledge base ---
+            chroma_url = os.getenv('CHROMA_SERVER_URL', 'http://localhost:5001')
+            ingest_payload = {
+                "collection_name": f"project_{project_id}",
+                "documents": [note_content],
+                "metadatas": [{"source_file": note_filename, "type": "saved_note"}],
+                "ids": [message_id]
+            }
+            try:
+                ingest_resp = requests.post(f"{chroma_url}/add", json=ingest_payload, timeout=10)
+                ingest_resp.raise_for_status()
+                logger.info(f"Note ingested into KB for project {project_id}: {message_id}")
+                ingest_status = "success"
+            except Exception as e:
+                logger.warning(f"Could not ingest note into KB: {e}")
+                ingest_status = "warning"
+            
+            logger.info(f"User {user_id} saved message {message_id} as note in project {project_id}.")
+
+            return {
+                "status": "success",
+                "note_path": note_filename,
+                "ingest_status": ingest_status
+            }, 201
+
+        except Exception as e:
+            logging.error(f"Failed to save note for message {message_id}: {e}", exc_info=True)
+            abort(500, message="Failed to save note. A microservice may be down.")
 
 # --- Job/Report Endpoints ---
 

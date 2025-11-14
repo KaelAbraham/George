@@ -7,6 +7,9 @@ import CaudexAPIClient from './client';
 import {
   ChatRequest,
   ChatResponse,
+  FeedbackRequest,
+  FeedbackResponse,
+  SaveNoteResponse,
   JobStatus,
   JobsList,
   WikiGenerationResponse,
@@ -44,6 +47,24 @@ export async function postChat(
 }
 
 /**
+ * Submit feedback for a chat message
+ */
+export async function postFeedback(
+  feedback: FeedbackRequest
+): Promise<FeedbackResponse> {
+  return getClient().postFeedback(feedback);
+}
+
+/**
+ * Save a chat message as a note in the knowledge base
+ */
+export async function saveMessageAsNote(
+  messageId: string
+): Promise<SaveNoteResponse> {
+  return getClient().saveMessageAsNote(messageId);
+}
+
+/**
  * Get job status
  */
 export async function getJobStatus(jobId: string): Promise<JobStatus> {
@@ -74,3 +95,4 @@ export async function getAdminCosts(): Promise<CostSummary> {
 }
 
 export { CaudexAPIClient };
+

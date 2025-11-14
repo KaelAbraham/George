@@ -8,11 +8,30 @@ export interface ChatRequest {
 }
 
 export interface ChatResponse {
+  messageId: string;
   response: string;
   intent: string;
   cost: number;
   downgraded: boolean;
   balance?: number | null;
+}
+
+export interface FeedbackRequest {
+  message_id: string;
+  rating: number;
+  category?: string | null;
+  comment?: string | null;
+}
+
+export interface FeedbackResponse {
+  status: string;
+  feedback_id: string;
+}
+
+export interface SaveNoteResponse {
+  status: string;
+  note_path: string;
+  ingest_status: string;
 }
 
 export interface JobStatus {

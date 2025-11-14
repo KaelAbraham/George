@@ -7,6 +7,9 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 import {
   ChatRequest,
   ChatResponse,
+  FeedbackRequest,
+  FeedbackResponse,
+  SaveNoteResponse,
   JobStatus,
   JobsList,
   WikiGenerationResponse,
@@ -37,6 +40,39 @@ export class CaudexAPIClient {
     const payload: ChatRequest = { query, project_id: projectId };
     try {
       const response = await this.axiosInstance.post<ChatResponse>('/chat', payload);
+      return response.data;
+    } catch (error) {
+      throw this.handleError(error);
+    }
+  }
+
+  /**
+   * Submit feedback for a chat message
+   * @param feedback The feedback request containing message_id, rating, category, comment
+   * @returns FeedbackResponse with status and feedback_id
+   */
+  async postFeedback(feedback: FeedbackRequest): Promise<FeedbackResponse> {
+    try {
+      const response = await this.axiosInstance.post<FeedbackResponse>(
+        '/feedback',
+        feedback
+      );
+      return response.data;
+    } catch (error) {
+      throw this.handleError(error);
+    }
+  }
+
+  /**
+   * Save a chat message as a note in the knowledge base
+   * @param messageId The message ID to save as a note
+   * @returns SaveNoteResponse with status and note path
+   */
+  async saveMessageAsNote(messageId: string): Promise<SaveNoteResponse> {
+    try {
+      const response = await this.axiosInstance.post<SaveNoteResponse>(
+        `/chat/${messageId}/save_as_note`
+      );
       return response.data;
     } catch (error) {
       throw this.handleError(error);
@@ -145,3 +181,4 @@ export class CaudexAPIClient {
 }
 
 export default CaudexAPIClient;
+

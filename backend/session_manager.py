@@ -158,6 +158,73 @@ class SessionManager:
         
         return "\n".join(formatted_lines)
 
+    def get_turn_by_id(self, message_id: str, user_id: str) -> Optional[Dict]:
+        """
+        Retrieves a single chat turn (query, response, project_id) by its unique message_id,
+        ensuring the user has permission to access it.
+        
+        Args:
+            message_id (str): The unique ID of the AI response message
+            user_id (str): The user ID for security verification
+            
+        Returns:
+            Optional[Dict]: Dictionary with keys 'project_id', 'user_query', 'ai_response'
+                           or None if not found or user lacks permission
+        """
+        try:
+            with self._get_conn() as conn:
+                # Find the AI response message with this message_id
+                cur = conn.execute(
+                    """
+                    SELECT id, project_id, user_id 
+                    FROM chat_history 
+                    WHERE message_id = ? AND user_id = ? AND role = 'model'
+                    """,
+                    (message_id, user_id)
+                )
+                response_row = cur.fetchone()
+                
+                if not response_row:
+                    logger.warning(f"Message {message_id} not found for user {user_id}")
+                    return None
+                
+                response_id = response_row[0]
+                project_id = response_row[1]
+                
+                # Get the AI response content
+                ai_response_content = response_row[2]
+                
+                # Find the preceding user message (the one right before this response)
+                cur = conn.execute(
+                    """
+                    SELECT content 
+                    FROM chat_history 
+                    WHERE id < ? AND project_id = ? AND user_id = ? AND role = 'user'
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (response_id, project_id, user_id)
+                )
+                user_row = cur.fetchone()
+                user_query_content = user_row[0] if user_row else ""
+                
+                # Fetch the actual response content again (fixing the logic above)
+                cur = conn.execute(
+                    "SELECT content FROM chat_history WHERE message_id = ? AND role = 'model'",
+                    (message_id,)
+                )
+                ai_response_row = cur.fetchone()
+                ai_response_content = ai_response_row[0] if ai_response_row else ""
+                
+                return {
+                    "project_id": project_id,
+                    "user_query": user_query_content,
+                    "ai_response": ai_response_content
+                }
+        except Exception as e:
+            logger.error(f"Failed to retrieve turn by message_id {message_id}: {e}", exc_info=True)
+            return None
+
     def clear_history(self, project_id: str, user_id: str):
         """Clears chat history for a specific user/project context."""
         with self._get_conn() as conn:
