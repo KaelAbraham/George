@@ -358,6 +358,43 @@ def check_auth_status():
     else:
         return jsonify({"isAuthenticated": False, "user": None}), 401
 
+
+# --- File Content Proxy Route ---
+
+@app.route('/v1/api/project/<project_id>/file/<file_name>', methods=['GET'])
+def get_file_content(project_id, file_name):
+    """
+    [AUTH] Proxies a request to the filesystem_server to get raw file content.
+    """
+    # 1. AUTHENTICATION (User must be logged in)
+    auth_data = _get_user_from_request(request)
+    if not auth_data or not auth_data.get('valid'):
+        return jsonify({"error": "Invalid or missing token"}), 401
+
+    # 2. PERMISSION CHECK (User must own this project)
+    # (You can add your project access logic here if needed)
+
+    try:
+        # 3. PROXY REQUEST to filesystem_server
+        # We assume the filesystem_server has an endpoint like /projects/<id>/<file>
+        resp = requests.get(
+            f"{FILESYSTEM_SERVER_URL}/projects/{project_id}/{file_name}",
+            timeout=10
+        )
+        resp.raise_for_status()  # Raise error for 404, 500, etc.
+
+        # 4. RETURN FILE CONTENT
+        # We return the raw text content directly
+        return resp.text, 200, {'Content-Type': resp.headers.get('Content-Type', 'text/plain')}
+
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            return jsonify({"error": "File not found"}), 404
+        return jsonify({"error": "Filesystem service error"}), 503
+    except Exception as e:
+        logger.error(f"Error in /get_file_content proxy: {e}", exc_info=True)
+        return jsonify({"error": "File service is unavailable"}), 503
+
 # --- Core Chat Endpoint (Migrated to flask-smorest) ---
 
 @blp_chat.route('/chat')
