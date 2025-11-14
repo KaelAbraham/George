@@ -1,357 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chat - {{ project.name }} - George AI</title>
-    <style>
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            margin: 0; 
-            padding: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-        }
-        
-        /* --- NEW: Styles for chat header --- */
-        .chat-header {
-            background-color: #333;
-            color: white;
-            padding: 15px 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid #444;
-        }
-        .chat-header h1 {
-            margin: 0;
-            font-size: 1.4em;
-            color: white;
-        }
-        .file-list {
-            font-size: 0.85em;
-            color: #ccc;
-            margin-top: 5px;
-        }
-        .file-list ul {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-            display: flex;
-            gap: 15px;
-        }
-        .file-list li {
-            background-color: #555;
-            padding: 3px 8px;
-            border-radius: 4px;
-        }
-        .nav-actions a {
-            color: #ddd;
-            text-decoration: none;
-            margin-left: 15px;
-            font-size: 0.9em;
-        }
-        .nav-actions a:hover {
-            color: white;
-        }
-        /* --- END NEW --- */
-        #chat-container { 
-            max-width: 900px; 
-            height: 75vh; 
-            margin: 20px auto;
-            display: flex; 
-            flex-direction: column; 
-            background: white; 
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2); 
-            border-radius: 15px; 
-            overflow: hidden;
-        }
-        #chat-header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 20px;
-            text-align: center;
-        }
-        #chat-header h1 {
-            margin: 0;
-            font-size: 1.5em;
-        }
-        #ai-status {
-            font-size: 0.9em;
-            opacity: 0.9;
-            margin-top: 5px;
-        }
-        #messages { 
-            flex: 1; 
-            padding: 20px; 
-            overflow-y: auto; 
-            background: #f8f9fa;
-        }
-        .message { 
-            margin-bottom: 20px; 
-            display: flex;
-            align-items: flex-start;
-        }
-        .user-message { 
-            justify-content: flex-end; 
-        }
-        .ai-message {
-            justify-content: flex-start;
-        }
-        .message .content { 
-            max-width: 70%; 
-            padding: 12px 16px; 
-            border-radius: 18px; 
-            line-height: 1.4;
-            position: relative;
-        }
-        .user-message .content { 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-        .ai-message .content { 
-            background: white;
-            border: 2px solid #e9ecef;
-            color: #333;
-        }
-        .message .avatar {
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            margin: 0 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            font-size: 14px;
-        }
-        .user-message .avatar {
-            background: #495057;
-            color: white;
-        }
-        .ai-message .avatar {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-        #chat-form { 
-            display: flex; 
-            padding: 20px; 
-            background: white;
-            border-top: 1px solid #e9ecef;
-        }
-        #chat-input { 
-            flex: 1; 
-            padding: 12px 16px; 
-            border: 2px solid #e9ecef; 
-            border-radius: 25px; 
-            outline: none;
-            font-size: 14px;
-        }
-        #chat-input:focus {
-            border-color: #667eea;
-        }
-        #send-btn { 
-            padding: 12px 20px; 
-            margin-left: 10px; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; 
-            border: none; 
-            border-radius: 25px; 
-            cursor: pointer;
-            font-weight: bold;
-            transition: transform 0.2s;
-        }
-        #send-btn:hover {
-            transform: translateY(-1px);
-        }
-        #send-btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none;
-        }
-        .thinking { 
-            color: #6c757d; 
-            font-style: italic; 
-            padding: 10px 0;
-        }
-        .typing-indicator {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-        .typing-indicator span {
-            height: 8px;
-            width: 8px;
-            background: #667eea;
-            border-radius: 50%;
-            display: inline-block;
-            animation: typing 1.4s infinite ease-in-out;
-        }
-        .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
-        .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
-        @keyframes typing {
-            0%, 80%, 100% { transform: scale(0); opacity: 0.5; }
-            40% { transform: scale(1); opacity: 1; }
-        }
-        .error {
-            color: #dc3545;
-            background-color: #f8d7da !important;
-            border-color: #f5c6cb !important;
-        }
-        .model-info {
-            font-size: 0.8em;
-            color: #6c757d;
-            margin-top: 5px;
-        }
-    </style>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>George Chat</title>
 </head>
-<body>
+<body class="bg-gray-100 h-screen m-0 p-0">
 
-{# --- NEW: Chat Header Section --- #}
-<div class="chat-header">
-    <div>
-        <h1>{{ project.name }}</h1>
-        <div class="file-list">
-            <span>Manuscript Files:</span>
-            {% if project.manuscript_files %}
-                <ul>
-                    {% for filename in project.manuscript_files %}
-                        <li>{{ filename }}</li>
-                    {% endfor %}
-                </ul>
-            {% else %}
-                <span>No manuscript files uploaded yet.</span>
-            {% endif %}
-        </div>
+    <div id="chat-root"
+         data-project-id="{{ project_id }}"
+         data-session-id="{{ session_id }}">
     </div>
-    <div class="nav-actions">
-        <a href="{{ url_for('project_manager.view_project', project_id=project.id) }}">Manage Files</a>
-        <a href="{{ url_for('project_manager.dashboard') }}">Back to Dashboard</a>
-    </div>
-</div>
-{# --- END NEW --- #}
 
-<div id="chat-container">
-    <div id="chat-header">
-        <h1>🤖 George AI Assistant</h1>
-        <div id="ai-status">
-            <span id="status-indicator">Ready to chat</span>
-        </div>
-    </div>
-    <div id="messages">
-        <div class="message ai-message">
-            <div class="avatar">🤖</div>
-            <div class="content">
-                Hello! I'm George, powered by Gemma 2B. I'm here to help you with your story, characters, world-building, and any writing questions you have. 
-                <br><br>
-                📁 <strong>Tip:</strong> Upload your manuscript using the "Upload File" button above to get personalized advice about your specific story!
-            </div>
-        </div>
-    </div>
-    <form id="chat-form">
-        <input type="text" id="chat-input" placeholder="Ask me about your story, characters, or writing..." autocomplete="off">
-        <button id="send-btn" type="submit">Send</button>
-    </form>
-</div>
+    <script>
+        // Pass the server-rendered chat history safely into the page
+        window.__INITIAL_HISTORY__ = {{ chat_history | tojson }};
+    </script>
 
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        const chatForm = document.getElementById('chat-form');
-        const chatInput = document.getElementById('chat-input');
-        const messagesContainer = document.getElementById('messages');
-        const projectName = '{{ project_name }}'; // Get the project name from the template
+    <!-- Load the Vite-built bundle -->
+    <script type="module" src="{{ url_for('static', filename='dist/assets/index.js') }}"></script>
 
-        chatForm.addEventListener('submit', async function(event) {
-            event.preventDefault();
-            const question = chatInput.value.trim();
-            if (!question) return;
+    <script>
+        // Mount ChatApp once Vite bundle is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            const root = document.getElementById('chat-root');
+            const ChatApp = window.GeorgeClient.ChatApp;
 
-            addMessage(question, 'user');
-            chatInput.value = '';
-            
-            const thinkingIndicator = addMessage('George is thinking...', 'ai', true);
+            if (ChatApp && root) {
+                const projectId = root.dataset.projectId;
+                const sessionId = root.dataset.sessionId;
+                const initialHistory = window.__INITIAL_HISTORY__ || [];
 
-            // --- SECURE API CALL WITH FIREBASE TOKEN ---
-            
-            // 1. Get the Firebase token from localStorage
-            const idToken = localStorage.getItem('firebaseIdToken');
-            if (!idToken) {
-                alert("Your session has expired. Please log in again.");
-                window.location.href = '/auth/login';
-                return;
-            }
+                const container = document.createElement('div');
+                root.appendChild(container);
 
-            // 2. Send the request to the new project-specific, secure endpoint
-            try {
-                const encodedProjectName = encodeURIComponent(projectName);
-                const response = await fetch(`/api/projects/${encodedProjectName}/chat`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': 'Bearer ' + idToken // Send the token for authentication
-                    },
-                    body: JSON.stringify({ 
-                        question: question
+                const reactRoot = ReactDOM.createRoot(container);
+                reactRoot.render(
+                    React.createElement(ChatApp, {
+                        projectId: projectId,
+                        sessionId: sessionId,
+                        initialHistory: initialHistory
                     })
-                });
-
-                if (response.status === 401) {
-                    alert("Authentication failed. Please log in again.");
-                    window.location.href = '/auth/login';
-                    return;
-                }
-
-                const data = await response.json();
-                
-                // 3. Display the final answer
-                if (data.answer) {
-                    thinkingIndicator.querySelector('.content').textContent = data.answer;
-                    thinkingIndicator.querySelector('.content').classList.remove('thinking');
-                } else {
-                    thinkingIndicator.querySelector('.content').textContent = data.error || 'An unknown error occurred.';
-                    thinkingIndicator.querySelector('.content').classList.add('error');
-                }
-
-            } catch (error) {
-                console.error('Error with chat:', error);
-                thinkingIndicator.querySelector('.content').textContent = 'An error occurred while communicating with the server.';
-                thinkingIndicator.querySelector('.content').classList.add('error');
+                );
             }
         });
+    </script>
 
-        // Helper function to add messages to the chat window
-        function addMessage(text, sender, isThinking = false) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${sender}-message`;
-            
-            const avatar = document.createElement('div');
-            avatar.className = 'avatar';
-            avatar.textContent = sender === 'user' ? '👤' : '🤖';
-            
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'content';
-            contentDiv.textContent = text;
-            
-            if (isThinking) {
-                contentDiv.classList.add('thinking');
-            }
-            
-            if (sender === 'user') {
-                messageDiv.appendChild(contentDiv);
-                messageDiv.appendChild(avatar);
-            } else {
-                messageDiv.appendChild(avatar);
-                messageDiv.appendChild(contentDiv);
-            }
-            
-            messagesContainer.appendChild(messageDiv);
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            return messageDiv;
-        }
-
-        // Auto-focus on input
-        chatInput.focus();
-    });
-</script>
 </body>
 </html>
+{% endblock %}
