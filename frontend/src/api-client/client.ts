@@ -10,6 +10,9 @@ import {
   FeedbackRequest,
   FeedbackResponse,
   SaveNoteResponse,
+  BookmarkRequest,
+  BookmarkResponse,
+  ProjectBookmarksResponse,
   JobStatus,
   JobsList,
   WikiGenerationResponse,
@@ -72,6 +75,41 @@ export class CaudexAPIClient {
     try {
       const response = await this.axiosInstance.post<SaveNoteResponse>(
         `/chat/${messageId}/save_as_note`
+      );
+      return response.data;
+    } catch (error) {
+      throw this.handleError(error);
+    }
+  }
+
+  /**
+   * Bookmark a chat message for later reference
+   * @param messageId The message ID to bookmark
+   * @param isBookmarked True to bookmark, false to unbookmark
+   * @returns BookmarkResponse with updated status
+   */
+  async toggleBookmark(messageId: string, isBookmarked: boolean): Promise<BookmarkResponse> {
+    try {
+      const payload: BookmarkRequest = { is_bookmarked: isBookmarked };
+      const response = await this.axiosInstance.post<BookmarkResponse>(
+        `/chat/${messageId}/bookmark`,
+        payload
+      );
+      return response.data;
+    } catch (error) {
+      throw this.handleError(error);
+    }
+  }
+
+  /**
+   * Get all bookmarked messages for a project
+   * @param projectId The project ID
+   * @returns ProjectBookmarksResponse with list of bookmarked messages
+   */
+  async getProjectBookmarks(projectId: string): Promise<ProjectBookmarksResponse> {
+    try {
+      const response = await this.axiosInstance.get<ProjectBookmarksResponse>(
+        `/project/${projectId}/bookmarks`
       );
       return response.data;
     } catch (error) {

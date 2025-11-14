@@ -10,6 +10,9 @@ import {
   FeedbackRequest,
   FeedbackResponse,
   SaveNoteResponse,
+  BookmarkRequest,
+  BookmarkResponse,
+  ProjectBookmarksResponse,
   JobStatus,
   JobsList,
   WikiGenerationResponse,
@@ -62,6 +65,25 @@ export async function saveMessageAsNote(
   messageId: string
 ): Promise<SaveNoteResponse> {
   return getClient().saveMessageAsNote(messageId);
+}
+
+/**
+ * Toggle bookmark status for a chat message
+ */
+export async function toggleBookmark(
+  messageId: string,
+  isBookmarked: boolean
+): Promise<BookmarkResponse> {
+  return getClient().toggleBookmark(messageId, isBookmarked);
+}
+
+/**
+ * Get all bookmarked messages for a project
+ */
+export async function getProjectBookmarks(
+  projectId: string
+): Promise<ProjectBookmarksResponse> {
+  return getClient().getProjectBookmarks(projectId);
 }
 
 /**

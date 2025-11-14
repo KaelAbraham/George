@@ -34,6 +34,28 @@ export interface SaveNoteResponse {
   ingest_status: string;
 }
 
+export interface BookmarkRequest {
+  is_bookmarked: boolean;
+}
+
+export interface BookmarkResponse {
+  status: string;
+  message_id: string;
+  is_bookmarked: boolean;
+}
+
+export interface BookmarkedMessage {
+  message_id: string;
+  user_query: string;
+  ai_response: string;
+  timestamp: string;
+  id: number;
+}
+
+export interface ProjectBookmarksResponse {
+  bookmarks: BookmarkedMessage[];
+}
+
 export interface JobStatus {
   job_id: string;
   project_id: string;
