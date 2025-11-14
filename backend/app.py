@@ -6,7 +6,7 @@ import uuid
 import sqlite3
 from pathlib import Path
 from datetime import datetime
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 from flask.views import MethodView
 from dotenv import load_dotenv
 from typing import Dict, Any, Optional, List, Tuple
@@ -290,6 +290,73 @@ class BookmarkListSchema(ma.Schema):
 class ProjectBookmarksSchema(ma.Schema):
     """Response schema for getting all bookmarks in a project."""
     bookmarks = ma.fields.List(ma.fields.Nested(BookmarkListSchema))
+
+# --- Authentication Proxy Routes (Gatekeeper Pattern) ---
+
+@app.route('/v1/api/auth/login', methods=['POST'])
+def proxy_login():
+    """
+    Proxies the login request to the Auth Server.
+    If successful, it receives the token and sets it in a secure, HttpOnly cookie.
+    """
+    try:
+        # 1. Forward login credentials to Auth Server
+        data = request.get_json()
+        resp = requests.post(
+            f"{AUTH_SERVER_URL}/login",
+            json=data,
+            timeout=5
+        )
+        resp.raise_for_status()  # Raise an error for bad responses (401, 500, etc.)
+
+        # 2. On success, get the token from the response
+        token_data = resp.json()
+        token = token_data.get('token')
+
+        # 3. Create a response and set the secure cookie
+        response_data = {"success": True, "user": token_data.get('user')}
+        response = make_response(jsonify(response_data))
+
+        response.set_cookie(
+            'auth_token',
+            value=token,
+            httponly=True,   # <-- CRITICAL: Makes it inaccessible to JavaScript
+            secure=True,     # <-- CRITICAL: Only send over HTTPS (in prod)
+            samesite='Lax'   # <-- Good security practice
+        )
+        return response
+
+    except requests.exceptions.HTTPError as e:
+        # Forward the auth server's error (e.g., "Invalid password")
+        return jsonify(e.response.json()), e.response.status_code
+    except Exception as e:
+        logger.error(f"Error in /login proxy: {e}", exc_info=True)
+        return jsonify({"error": "Login service is unavailable"}), 503
+
+
+@app.route('/v1/api/auth/logout', methods=['POST'])
+def proxy_logout():
+    """
+    Logs the user out by clearing the secure cookie.
+    """
+    response = make_response(jsonify({"success": True, "message": "Logged out"}))
+    response.set_cookie('auth_token', '', expires=0, httponly=True)  # Clear the cookie
+    return response
+
+
+@app.route('/v1/api/auth/check', methods=['GET'])
+def check_auth_status():
+    """
+    Checks if the user is currently authenticated by verifying the token in their cookie.
+    This is called by the frontend on page load.
+    """
+    # _get_user_from_request is now modified to read from the cookie
+    user_data = _get_user_from_request(request)
+
+    if user_data and user_data.get('valid'):
+        return jsonify({"isAuthenticated": True, "user": user_data}), 200
+    else:
+        return jsonify({"isAuthenticated": False, "user": None}), 401
 
 # --- Core Chat Endpoint (Migrated to flask-smorest) ---
 
@@ -843,12 +910,21 @@ api.register_blueprint(blp_admin)
 # --- Helper Functions ---
 
 def _get_user_from_request(request) -> Optional[Dict[str, Any]]:
-    """Helper to call the Auth Server and verify the user's token."""
-    auth_header = request.headers.get('Authorization')
-    if not auth_header:
-        return None
+    """
+    Helper to call the Auth Server and verify the user's token,
+    which is now stored in a secure HttpOnly cookie.
+    """
+    # 1. Get token from the cookie
+    token = request.cookies.get('auth_token')
+
+    if not token:
+        return None  # No cookie, not authenticated
+
     try:
-        # This call verifies the Firebase token AND gets our internal role/permissions
+        # 2. Send this token in the Authorization header to the auth service
+        # (Server-to-server request, not a browser request)
+        auth_header = f"Bearer {token}"
+
         resp = requests.post(f"{AUTH_SERVER_URL}/verify_token", headers={"Authorization": auth_header})
         if resp.status_code == 200:
             return resp.json()
