@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'backend'))
 
 # --- UPDATED IMPORTS ---
 from services import DocumentParser, TextChunker, WebSanitizer, DocumentParserError
-from service_utils import require_internal_token
+from service_utils import require_internal_token, INTERNAL_TOKEN
 import requests 
 import dataclasses 
 import uuid
@@ -38,19 +38,50 @@ app.config['MAX_CONTENT_LENGTH_JSON'] = 10 * 1024 * 1024  # 10MB for JSON payloa
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB for file uploads
 MAX_CONTENT_SIZE = 5 * 1024 * 1024  # 5MB for save_file endpoint content
 
-# --- MIDDLEWARE: Extract user_id from X-User-ID header ---
+# --- MIDDLEWARE: Validate internal token and extract user_id ---
 @app.before_request
-def extract_user_id():
+def validate_token_and_extract_user_id():
     """
-    Extract X-User-ID from request headers and store in g.user_id.
-    This ensures all requests have a user_id for path resolution.
+    CRITICAL SECURITY: Validate X-INTERNAL-TOKEN before trusting X-User-ID header.
+    
+    This prevents header spoofing attacks where an attacker could set:
+        X-User-ID: victim-user-123
+    to access another user's files.
+    
+    By requiring the internal token, we ensure that X-User-ID only comes from
+    authenticated backend services that we trust.
+    
+    Flow:
+    1. Validate X-INTERNAL-TOKEN matches INTERNAL_SERVICE_TOKEN
+    2. Only if token is valid, extract and use X-User-ID
+    3. Reject all requests without valid token (403 Forbidden)
     """
-    user_id = request.headers.get('X-User-ID')
-    if user_id:
+    
+    # In dev mode, if no token is configured, allow all requests (for development)
+    if not INTERNAL_TOKEN:
+        # Dev mode: extract user_id without validation
+        user_id = request.headers.get('X-User-ID', 'default')
         g.user_id = user_id
-    else:
-        # Default to 'default' if no user_id provided
-        g.user_id = 'default'
+        return
+    
+    # Production mode: token is configured, enforce it
+    received_token = request.headers.get('X-INTERNAL-TOKEN')
+    
+    # Validate token
+    if not received_token or received_token != INTERNAL_TOKEN:
+        logger.warning(
+            f"Unauthorized request: invalid/missing X-INTERNAL-TOKEN from {request.remote_addr}"
+        )
+        return jsonify({"error": "Unauthorized - invalid internal token"}), 403
+    
+    # Token is valid, now we can trust X-User-ID
+    user_id = request.headers.get('X-User-ID', 'default')
+    if not user_id:
+        logger.warning(f"Request with valid token but missing X-User-ID from {request.remote_addr}")
+        user_id = 'default'
+    
+    g.user_id = user_id
+    logger.debug(f"Authorized request for user {user_id} with valid internal token")
 
 # --- NEW: Define allowed extensions set ---
 ALLOWED_EXTENSIONS = {'txt', 'md', 'docx', 'pdf', 'odt'}

@@ -436,10 +436,12 @@ def get_file_content(project_id, file_name):
     # (You can add your project access logic here if needed)
 
     try:
-        # 3. PROXY REQUEST to filesystem_server with user_id header
+        # 3. PROXY REQUEST to filesystem_server with user_id and internal token headers
+        headers = {'X-User-ID': auth_data.get('user_id', '')}
+        headers.update(get_internal_headers())
         resp = requests.get(
             f"{FILESYSTEM_SERVER_URL}/file/{project_id}/{file_name}",
-            headers={'X-User-ID': auth_data.get('user_id', '')},
+            headers=headers,
             timeout=10
         )
         resp.raise_for_status()  # Raise error for 404, 500, etc.
@@ -481,14 +483,16 @@ def proxy_file_upload(project_id):
         return jsonify({"error": "No file selected"}), 400
 
     try:
-        # 3. FORWARD THE FILE to filesystem_server with user_id header
+        # 3. FORWARD THE FILE to filesystem_server with user_id and internal token headers
         # Stream the file to the internal service
         files = {'file': (file.filename, file.stream, file.content_type)}
+        headers = {'X-User-ID': auth_data.get('user_id', '')}
+        headers.update(get_internal_headers())
         
         resp = requests.post(
             f"{FILESYSTEM_SERVER_URL}/projects/{project_id}/upload",
             files=files,
-            headers={'X-User-ID': auth_data.get('user_id', '')},
+            headers=headers,
             timeout=30
         )
         resp.raise_for_status()
