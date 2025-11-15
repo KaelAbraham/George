@@ -38,15 +38,26 @@ except Exception as e:
     logger.error(f"GraphManager initialization failed: {e}", exc_info=True)
     graph_manager = None
 
+# Get Chroma storage path
+CHROMA_STORAGE_PATH = str(Path.cwd() / "data" / "chroma_db")
+
 # --- HEALTH CHECK ENDPOINTS ---
 
 @app.route('/health', methods=['GET'])
 def health():
     """
-    Simple health check endpoint.
-    Returns 200 if service is running, regardless of backend status.
+    Health check endpoint that reflects db_manager status.
+    Returns 200 if service is running and database is initialized.
+    Returns 503 if database is not available.
     """
-    return jsonify({'status': 'ok', 'service': 'chroma_server'}), 200
+    db_status = db_manager is not None and db_manager.client is not None
+    status_code = 200 if db_status else 503
+    
+    return jsonify({
+        "status": "Chroma Server Operational" if db_status else "Chroma Server Unavailable",
+        "storage": CHROMA_STORAGE_PATH,
+        "db_ready": db_status
+    }), status_code
 
 @app.route('/ready', methods=['GET'])
 def readiness():
