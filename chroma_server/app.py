@@ -1,12 +1,41 @@
 """Main application file for the ChromaDB server."""
 from flask import Flask, request, jsonify
+from functools import wraps
+import os
+import logging
 from db_manager import ChromaManager, GraphManager
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# --- INTERNAL SERVICE TOKEN ---
+INTERNAL_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", None)
 
 app = Flask(__name__)
 
 # Initialize ChromaDB manager and Graph manager
 db_manager = ChromaManager()
 graph_manager = GraphManager()
+
+# --- DECORATOR: Require Internal Service Token ---
+def require_internal_token(f):
+    """
+    Decorator to protect internal service endpoints.
+    Checks X-INTERNAL-TOKEN header against INTERNAL_SERVICE_TOKEN env var.
+    In dev mode (no token configured), allows all requests.
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if INTERNAL_TOKEN is None:
+            # Dev mode: allow if not configured
+            return f(*args, **kwargs)
+        token = request.headers.get("X-INTERNAL-TOKEN")
+        if not token or token != INTERNAL_TOKEN:
+            logger.warning(f"Unauthorized internal request: missing or invalid token")
+            return jsonify({"error": "Forbidden"}), 403
+        return f(*args, **kwargs)
+    return decorated
 
 @app.route('/create_collection', methods=['POST'])
 def create_collection():

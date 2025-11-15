@@ -1,6 +1,7 @@
 """Main application file for the filesystem server."""
 from flask import Flask, request, jsonify, g
 from werkzeug.utils import secure_filename
+from functools import wraps
 import os
 import logging
 import subprocess
@@ -16,6 +17,9 @@ import json
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# --- INTERNAL SERVICE TOKEN ---
+INTERNAL_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", None)
+
 app = Flask(__name__)
 
 # Configuration
@@ -24,6 +28,25 @@ PROJECTS_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'proj
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['PROJECTS_FOLDER'] = PROJECTS_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB (increased for large PDFs)
+
+# --- DECORATOR: Require Internal Service Token ---
+def require_internal_token(f):
+    """
+    Decorator to protect internal service endpoints.
+    Checks X-INTERNAL-TOKEN header against INTERNAL_SERVICE_TOKEN env var.
+    In dev mode (no token configured), allows all requests.
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if INTERNAL_TOKEN is None:
+            # Dev mode: allow if not configured
+            return f(*args, **kwargs)
+        token = request.headers.get("X-INTERNAL-TOKEN")
+        if not token or token != INTERNAL_TOKEN:
+            logger.warning(f"Unauthorized internal request: missing or invalid token")
+            return jsonify({"error": "Forbidden"}), 403
+        return f(*args, **kwargs)
+    return decorated
 
 # --- MIDDLEWARE: Extract user_id from X-User-ID header ---
 @app.before_request
