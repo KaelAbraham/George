@@ -4,7 +4,13 @@ from functools import wraps
 import os
 import logging
 import sys
+from pathlib import Path
+
+# Add backend to path to import service_utils
+sys.path.insert(0, str(Path(__file__).parent.parent / 'backend'))
+
 from db_manager import ChromaManager, GraphManager
+from service_utils import require_internal_token
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,25 +37,6 @@ except Exception as e:
     print(f"FATAL: Could not initialize GraphManager: {e}", file=sys.stderr)
     logger.error(f"GraphManager initialization failed: {e}", exc_info=True)
     graph_manager = None
-
-# --- DECORATOR: Require Internal Service Token ---
-def require_internal_token(f):
-    """
-    Decorator to protect internal service endpoints.
-    Checks X-INTERNAL-TOKEN header against INTERNAL_SERVICE_TOKEN env var.
-    In dev mode (no token configured), allows all requests.
-    """
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if INTERNAL_TOKEN is None:
-            # Dev mode: allow if not configured
-            return f(*args, **kwargs)
-        token = request.headers.get("X-INTERNAL-TOKEN")
-        if not token or token != INTERNAL_TOKEN:
-            logger.warning(f"Unauthorized internal request: missing or invalid token")
-            return jsonify({"error": "Forbidden"}), 403
-        return f(*args, **kwargs)
-    return decorated
 
 # --- HEALTH CHECK ENDPOINTS ---
 

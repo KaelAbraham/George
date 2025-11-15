@@ -30,6 +30,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent))
 
 from session_manager import SessionManager
+from service_utils import get_internal_headers
 
 # Configure logging
 logging.basicConfig(
@@ -178,10 +179,12 @@ class IngestionWorker:
                 "file_path": note_filename,
                 "content": content
             }
+            headers = {'X-User-ID': user_id}
+            headers.update(get_internal_headers())
             response = requests.post(
                 f"{FILESYSTEM_SERVER_URL}/save_file",
                 json=payload,
-                headers={'X-User-ID': user_id},
+                headers=headers,
                 timeout=10
             )
             response.raise_for_status()
@@ -212,6 +215,7 @@ class IngestionWorker:
             response = requests.post(
                 f"{CHROMA_SERVER_URL}/add",
                 json=payload,
+                headers=get_internal_headers(),
                 timeout=10
             )
             response.raise_for_status()
@@ -238,6 +242,7 @@ class IngestionWorker:
             response = requests.post(
                 f"{GIT_SERVER_URL}/snapshot",
                 json=payload,
+                headers=get_internal_headers(),
                 timeout=10
             )
             response.raise_for_status()

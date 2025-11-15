@@ -6,8 +6,15 @@ import os
 import logging
 import subprocess
 import tempfile
+import sys
+from pathlib import Path
+
+# Add backend to path to import service_utils
+sys.path.insert(0, str(Path(__file__).parent.parent / 'backend'))
+
 # --- UPDATED IMPORTS ---
 from services import DocumentParser, TextChunker, WebSanitizer, DocumentParserError
+from service_utils import require_internal_token
 import requests 
 import dataclasses 
 import uuid
@@ -16,9 +23,6 @@ import json
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# --- INTERNAL SERVICE TOKEN ---
-INTERNAL_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", None)
 
 app = Flask(__name__)
 
@@ -33,25 +37,6 @@ app.config['MAX_CONTENT_LENGTH_JSON'] = 10 * 1024 * 1024  # 10MB for JSON payloa
 # Upload size limits for different operations
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB for file uploads
 MAX_CONTENT_SIZE = 5 * 1024 * 1024  # 5MB for save_file endpoint content
-
-# --- DECORATOR: Require Internal Service Token ---
-def require_internal_token(f):
-    """
-    Decorator to protect internal service endpoints.
-    Checks X-INTERNAL-TOKEN header against INTERNAL_SERVICE_TOKEN env var.
-    In dev mode (no token configured), allows all requests.
-    """
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if INTERNAL_TOKEN is None:
-            # Dev mode: allow if not configured
-            return f(*args, **kwargs)
-        token = request.headers.get("X-INTERNAL-TOKEN")
-        if not token or token != INTERNAL_TOKEN:
-            logger.warning(f"Unauthorized internal request: missing or invalid token")
-            return jsonify({"error": "Forbidden"}), 403
-        return f(*args, **kwargs)
-    return decorated
 
 # --- MIDDLEWARE: Extract user_id from X-User-ID header ---
 @app.before_request

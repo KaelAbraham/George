@@ -14,6 +14,7 @@ from flask_smorest import Api, abort
 from flask_cors import CORS
 from neo4j import GraphDatabase
 from pydantic import BaseModel, ValidationError
+from service_utils import require_internal_token, get_internal_headers
 
 # --- Local Imports ---
 # These are the new foundational services we just planned
@@ -1042,10 +1043,12 @@ def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
                 "file_path": f"wiki/{file_data.get('filename', 'unknown.md')}",
                 "content": file_data.get('content', '')
             }
+            headers = {'X-User-ID': user_id}
+            headers.update(get_internal_headers())
             save_resp = requests.post(
                 f"{FILESYSTEM_SERVER_URL}/save_file",
                 json=save_payload,
-                headers={'X-User-ID': user_id},
+                headers=headers,
                 timeout=10
             )
             if save_resp.status_code == 200:
@@ -1290,12 +1293,17 @@ def get_user_balance(user_id: str) -> Optional[int]:
 def deduct_cost(user_id: str, job_id: str, cost: float, description: str):
     """Tells the billing server to log a transaction and deduct cost."""
     try:
-        resp = requests.post(f"{BILLING_SERVER_URL}/deduct", json={
-            "user_id": user_id,
-            "cost": cost,
-            "job_id": job_id,
-            "description": description
-        }, timeout=2.0)
+        resp = requests.post(
+            f"{BILLING_SERVER_URL}/deduct",
+            json={
+                "user_id": user_id,
+                "cost": cost,
+                "job_id": job_id,
+                "description": description
+            },
+            headers=get_internal_headers(),
+            timeout=2.0
+        )
         if resp.status_code != 200:
             raise Exception(f"Billing server returned {resp.status_code}")
     except Exception as e:

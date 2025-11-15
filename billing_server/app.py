@@ -1,8 +1,15 @@
 import os
 import logging
+import sys
+from pathlib import Path
 from flask import Flask, request, jsonify
 from functools import wraps
 from billing_manager import BillingManager
+
+# Add backend to path to import service_utils
+sys.path.insert(0, str(Path(__file__).parent.parent / 'backend'))
+
+from service_utils import require_internal_token
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO)
@@ -16,25 +23,6 @@ app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'billing-dev-key')
 
 # Initialize the Business Logic
 manager = BillingManager()
-
-# --- DECORATOR: Require Internal Service Token ---
-def require_internal_token(f):
-    """
-    Decorator to protect internal service endpoints.
-    Checks X-INTERNAL-TOKEN header against INTERNAL_SERVICE_TOKEN env var.
-    In dev mode (no token configured), allows all requests.
-    """
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if INTERNAL_TOKEN is None:
-            # Dev mode: allow if not configured
-            return f(*args, **kwargs)
-        token = request.headers.get("X-INTERNAL-TOKEN")
-        if not token or token != INTERNAL_TOKEN:
-            logger.warning(f"Unauthorized internal request: missing or invalid token")
-            return jsonify({"error": "Forbidden"}), 403
-        return f(*args, **kwargs)
-    return decorated
 
 # --- Internal Admin Endpoints ---
 # Protected by X-INTERNAL-TOKEN header when INTERNAL_SERVICE_TOKEN is configured
