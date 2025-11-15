@@ -28,6 +28,7 @@ manager = BillingManager()
 # Protected by X-INTERNAL-TOKEN header when INTERNAL_SERVICE_TOKEN is configured
 
 @app.route('/account', methods=['POST'])
+@require_internal_token
 def create_account():
     """
     Creates a new user record.
@@ -55,6 +56,7 @@ def create_account():
         return jsonify({"status": "exists", "message": "Account already exists"}), 200
 
 @app.route('/balance/<user_id>', methods=['GET'])
+@require_internal_token
 def get_balance(user_id):
     """
     Returns the current balance and tier.
@@ -73,6 +75,7 @@ def get_balance(user_id):
     })
 
 @app.route('/deduct', methods=['POST'])
+@require_internal_token
 def deduct_funds():
     """
     Deducts funds for API usage.
@@ -104,6 +107,7 @@ def deduct_funds():
         return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/top_up', methods=['POST'])
+@require_internal_token
 def top_up():
     """
     Adds funds to a user's account.

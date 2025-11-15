@@ -1,0 +1,156 @@
+version: "3.9"
+
+# PRODUCTION DEPLOYMENT CONFIGURATION
+# Uses gunicorn for all services (no debug mode)
+# Sets FLASK_ENV=production to disable Flask debug features
+# Uses hardcoded ports (6xxx for internal services)
+# No volume mounts (use ConfigMaps/Secrets in Kubernetes)
+# All services use Dockerfiles with gunicorn CMD
+
+services:
+
+  ############################################################
+  # BACKEND — Flask Brain Service (Public API)
+  ############################################################
+  backend:
+    image: gcr.io/george-ai/backend:latest
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+      - AUTH_SERVER_URL=http://auth:6001
+      - FILESYSTEM_SERVER_URL=http://filesystem:6002
+      - CHROMA_SERVER_URL=http://chroma:6003
+      - BILLING_SERVER_URL=http://billing:6004
+      - GIT_SERVER_URL=http://git:6005
+      - EXTERNAL_DATA_SERVER_URL=http://external_data:6006
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    depends_on:
+      - auth
+      - filesystem
+      - chroma
+      - billing
+      - git
+    networks:
+      - caudexnet
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ############################################################
+  # MICROSERVICES — Internal Only
+  ############################################################
+
+  auth:
+    image: gcr.io/george-ai/auth-server:latest
+    expose:
+      - "6001"
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+    networks:
+      - caudexnet
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6001/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  filesystem:
+    image: gcr.io/george-ai/filesystem-server:latest
+    expose:
+      - "6002"
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+    volumes:
+      - filesystem_data:/app/projects
+    networks:
+      - caudexnet
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6002/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  chroma:
+    image: gcr.io/george-ai/chroma-server:latest
+    expose:
+      - "6003"
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+    volumes:
+      - chroma_data:/app/data
+    networks:
+      - caudexnet
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6003/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  billing:
+    image: gcr.io/george-ai/billing-server:latest
+    expose:
+      - "6004"
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+    networks:
+      - caudexnet
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6004/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  git:
+    image: gcr.io/george-ai/git-server:latest
+    expose:
+      - "6005"
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN}
+    volumes:
+      - git_data:/app/projects
+    networks:
+      - caudexnet
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6005/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ############################################################
+  # GRAPH DATABASE — Neo4j for Knowledge Graph Storage
+  ############################################################
+  graph_server:
+    image: neo4j:latest
+    expose:
+      - "7687"
+    volumes:
+      - graph_data:/data
+    environment:
+      - NEO4J_AUTH=none
+    networks:
+      - caudexnet
+
+volumes:
+  filesystem_data:
+  chroma_data:
+  git_data:
+  graph_data:
+
+networks:
+  caudexnet:
+    driver: bridge

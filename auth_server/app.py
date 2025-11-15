@@ -23,7 +23,14 @@ firebase_admin.initialize_app(cred)
 # --- SERVICE DISCOVERY ---
 # Internal service URLs (6000-series ports are reserved for internal services)
 BILLING_SERVER_URL = os.environ.get("BILLING_SERVER_URL", "http://localhost:6004")
+INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN")
 USER_CAP = 500 # Your hard limit
+
+def get_internal_headers():
+    """Get headers dict with internal service token for requests to other services."""
+    if INTERNAL_SERVICE_TOKEN:
+        return {"X-INTERNAL-TOKEN": INTERNAL_SERVICE_TOKEN}
+    return {}
 
 @app.route('/validate_invite', methods=['POST'])
 def validate_invite():
@@ -45,8 +52,8 @@ def validate_invite():
     # 2. Check Global Inventory (The "Sold Out" Logic)
     try:
         # Call Billing Server to get active subscription count
-        # Note: In a real deploy, secure this internal call!
-        resp = requests.get(f"{BILLING_SERVER_URL}/stats/subscription_count")
+        headers = get_internal_headers()
+        resp = requests.get(f"{BILLING_SERVER_URL}/stats/subscription_count", headers=headers)
         if resp.status_code == 200:
             count = resp.json().get('count', 0)
             if count >= USER_CAP:
@@ -90,10 +97,11 @@ def register_user():
         auth_manager.decrement_invite(invite_code)
         
         # Initialize Billing Account (Call Billing Server)
+        headers = get_internal_headers()
         requests.post(f"{BILLING_SERVER_URL}/account", json={
             "user_id": user_id,
             "tier": invite_status['role']
-        })
+        }, headers=headers)
 
         return jsonify({"status": "success", "user_id": user_id}), 201
 
