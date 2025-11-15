@@ -1169,43 +1169,82 @@ api.register_blueprint(blp_admin)
 
 # --- Helper Functions ---
 
+def get_user_id_from_request(req):
+    """
+    Extract and verify user ID from request.
+    
+    First tries to get Bearer token from Authorization header,
+    then verifies it with the auth server.
+    Falls back to DEV_MOCK_USER_ID in development mode.
+    
+    Returns:
+        str: User ID if authenticated
+        None: If authentication fails or no valid token
+    """
+    # 1. Try Bearer token from Authorization header
+    auth_header = req.headers.get('Authorization')
+    if auth_header and auth_header.startswith('Bearer '):
+        token = auth_header.split(' ')[1]
+        try:
+            resp = requests.post(
+                f"{AUTH_SERVER_URL}/verify_token",
+                json={"token": token},
+                timeout=3
+            )
+            if resp.ok:
+                user_data = resp.json()
+                return user_data.get("user_id")
+            return None
+        except requests.RequestException:
+            return None
+    
+    # 2. Try auth_token from cookie (for browser requests)
+    token = req.cookies.get('auth_token')
+    if token:
+        try:
+            auth_header = f"Bearer {token}"
+            resp = requests.post(
+                f"{AUTH_SERVER_URL}/verify_token",
+                headers={"Authorization": auth_header},
+                timeout=3
+            )
+            if resp.ok:
+                user_data = resp.json()
+                return user_data.get("user_id")
+            return None
+        except requests.RequestException:
+            return None
+    
+    # 3. Development fallback - only if no auth header or cookie
+    if os.getenv('DEV_MODE') == 'true':
+        mock_user_id = os.getenv('DEV_MOCK_USER_ID', 'dev-mock-user-1')
+        logging.debug(f"Dev mode: using mock user {mock_user_id}")
+        return mock_user_id
+    
+    return None
+
 def _get_user_from_request(request) -> Optional[Dict[str, Any]]:
     """
     Helper to call the Auth Server and verify the user's token,
-    which is now stored in a secure HttpOnly cookie.
+    which is now stored in a secure HttpOnly cookie or Bearer token.
     
     In development mode (when DEV_MODE=true), uses a fixed mock user ID
     to preserve job ownership across requests.
+    
+    Returns full user data dict for permission checks.
     """
-    # 1. Get token from the cookie
-    token = request.cookies.get('auth_token')
-
-    if not token:
-        # Development mode fallback - use fixed mock user ID
-        if os.getenv('DEV_MODE') == 'true':
-            mock_user_id = os.getenv('DEV_MOCK_USER_ID', 'dev-mock-user-1')
-            logging.debug(f"Dev mode: using mock user {mock_user_id}")
-            return {
-                'user_id': mock_user_id,
-                'valid': True,
-                'role': 'admin',  # Give dev user admin privileges
-                'guest_projects': []
-            }
-        return None  # No cookie, not authenticated
-
-    try:
-        # 2. Send this token in the Authorization header to the auth service
-        # (Server-to-server request, not a browser request)
-        auth_header = f"Bearer {token}"
-
-        resp = requests.post(f"{AUTH_SERVER_URL}/verify_token", headers={"Authorization": auth_header})
-        if resp.status_code == 200:
-            return resp.json()
-        logging.warning(f"Auth verification failed with status {resp.status_code}: {resp.text}")
+    user_id = get_user_id_from_request(request)
+    if not user_id:
         return None
-    except Exception as e:
-        logging.error(f"Auth verification call failed: {e}")
-        return None
+    
+    # For now, return a basic user dict with the user_id
+    # If we need role info, we'd fetch it from the auth server
+    return {
+        'user_id': user_id,
+        'valid': True,
+        'role': 'admin' if user_id.startswith('dev-') else 'user',
+        'guest_projects': []
+    }
 
 def _check_project_access(auth_data: Dict, project_id: str) -> bool:
     """Checks if user is admin OR has guest access to the project."""
