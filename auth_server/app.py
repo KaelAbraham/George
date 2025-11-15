@@ -216,23 +216,36 @@ def register_user():
             logger.warning(f"register_user: User {user_id} already exists")
             return jsonify({"error": "User already registered"}), 409
         
-        # 6. CREATE USER: Record in local DB
+        # 6. INITIALIZE BILLING ACCOUNT: Call Billing Server BEFORE persisting user
+        # This ensures if billing fails, we don't leave a half-created user in the system
+        headers = get_internal_headers()
+        try:
+            resp = requests.post(
+                f"{BILLING_SERVER_URL}/account",
+                json={
+                    "user_id": user_id,
+                    "tier": invite_status['role']
+                },
+                headers=headers,
+                timeout=5
+            )
+            resp.raise_for_status()
+            logger.info(f"register_user: Billing account initialized for {user_id}")
+        except requests.exceptions.RequestException as e:
+            logger.error(
+                f"register_user: Failed to initialize billing account for {user_id}: {e}",
+                exc_info=True
+            )
+            return jsonify({
+                "error": "Account initialization failed. Please try again or contact support."
+            }), 503
+        
+        # 7. CREATE USER: Record in local DB (only after billing succeeds)
         auth_manager.create_user(user_id, email, role=invite_status['role'])
         logger.info(f"register_user: Created user {user_id} with email {email}")
         
-        # 7. CONSUME INVITE: Decrement uses
+        # 8. CONSUME INVITE: Decrement uses (final step after all checks pass)
         auth_manager.decrement_invite(invite_code)
-        
-        # 8. INITIALIZE BILLING ACCOUNT: Call Billing Server
-        headers = get_internal_headers()
-        try:
-            requests.post(f"{BILLING_SERVER_URL}/account", json={
-                "user_id": user_id,
-                "tier": invite_status['role']
-            }, headers=headers, timeout=5)
-        except Exception as billing_error:
-            logger.error(f"Failed to initialize billing account for {user_id}: {billing_error}")
-            # Don't fail registration if billing is down, but log it prominently
         
         logger.info(f"register_user: Successfully registered {email} ({user_id})")
         return jsonify({"status": "success", "user_id": user_id}), 201
