@@ -14,7 +14,7 @@ from flask_smorest import Api, abort
 from flask_cors import CORS
 from neo4j import GraphDatabase
 from pydantic import BaseModel, ValidationError
-from service_utils import require_internal_token, get_internal_headers
+from service_utils import require_internal_token, get_internal_headers, ResilientServiceClient, ServiceUnavailable
 
 # --- Local Imports ---
 # These are the new foundational services we just planned
@@ -22,6 +22,7 @@ from llm_client import GeminiClient, MultiModelCostAggregator
 from session_manager import SessionManager
 from job_manager import JobManager
 from feedback_manager import FeedbackManager
+from distributed_saga import WikiGenerationSaga
 # This is your premium report/wiki generator
 try:
     from knowledge_extraction.orchestrator import KnowledgeExtractor as KnowledgeExtractionOrchestrator
@@ -966,15 +967,18 @@ def _save_relationships_to_graph(project_id: str, relationships: List[Tuple[str,
 # --- WIKI Generation Task Helper Function ---
 def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
     """
-    The actual heavy-lifting for the wiki job.
+    The actual heavy-lifting for the wiki job with transactional consistency.
+    
+    Uses the Saga Pattern to ensure consistency across microservices.
+    If any step fails, all previous steps are automatically rolled back.
     
     Steps:
     1. Get all chunks from chroma_server
     2. Call KnowledgeExtractionOrchestrator to generate wiki files
     3. Extract relationships from documents
     4. Save relationships to Neo4j graph database
-    5. Save files using filesystem_server
-    6. Create Git snapshot
+    5. Save files using filesystem_server (WITH ROLLBACK)
+    6. Create Git snapshot (WITH ROLLBACK)
     """
     logging.info(f"[WIKI] Starting wiki generation for project {project_id}")
     collection_name = f"project_{project_id}"
@@ -1037,59 +1041,43 @@ def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
     except Exception as e:
         logging.warning(f"[WIKI] Step 4 WARNING: Graph storage failed: {e}. Continuing.")
 
-    # Step 5: Save files using filesystem_server
-    logging.info(f"[WIKI] Step 5: Saving files via filesystem_server...")
-    saved_count = 0
+    # --- Steps 5-6: Use Saga Pattern for transactional consistency ---
+    logging.info(f"[WIKI] Step 5-6: Starting transactional saga for file saves and git snapshot...")
+    
+    saga = WikiGenerationSaga(
+        project_id=project_id,
+        user_id=user_id,
+        filesystem_url=FILESYSTEM_SERVER_URL,
+        git_url=GIT_SERVER_URL,
+        internal_headers=get_internal_headers()
+    )
+    
     try:
-        for file_data in generated_files:
-            save_payload = {
-                "project_id": project_id,
-                "file_path": f"wiki/{file_data.get('filename', 'unknown.md')}",
-                "content": file_data.get('content', '')
-            }
-            headers = {'X-User-ID': user_id}
-            headers.update(get_internal_headers())
-            save_resp = requests.post(
-                f"{FILESYSTEM_SERVER_URL}/save_file",
-                json=save_payload,
-                headers=headers,
-                timeout=10
-            )
-            if save_resp.status_code == 200:
-                saved_count += 1
-                logging.debug(f"[WIKI] Saved {file_data.get('filename', 'unknown')}")
+        # Execute saga: saves files and creates snapshot
+        # If any step fails, rollback happens automatically
+        result = saga.execute_with_consistency(generated_files)
         
-        logging.info(f"[WIKI] Step 5 SUCCESS: Saved {saved_count}/{len(generated_files)} files.")
+        if result["status"] == "success":
+            logging.info(f"[WIKI] Steps 5-6 SUCCESS: Saga completed successfully")
+            logging.info(f"[WIKI] Wiki generation completed for project {project_id}")
+            
+            return {
+                "files_created": result.get("files_created", 0),
+                "relationships_extracted": len(relationships),
+                "entities_processed": len(generated_files),
+                "snapshot_id": result.get("snapshot_id"),
+                "message": result.get("message", f"Successfully generated wiki for project {project_id}")
+            }
+        else:
+            # Saga failed and was rolled back
+            error_msg = result.get("error", "Saga execution failed")
+            logging.error(f"[WIKI] Steps 5-6 FAILED: {error_msg}")
+            raise Exception(f"Wiki generation saga failed: {error_msg}")
+            
     except Exception as e:
-        logging.error(f"[WIKI] Step 5 FAILED: {e}")
-        raise Exception(f"Failed to save generated files: {e}")
-
-    # Step 6: Create Git snapshot
-    logging.info(f"[WIKI] Step 6: Creating Git snapshot...")
-    try:
-        git_resp = requests.post(
-            f"{GIT_SERVER_URL}/snapshot/{project_id}",
-            json={
-                "user_id": user_id,
-                "message": f"Auto-generated wiki with {saved_count} files and {len(relationships)} relationships."
-            },
-            timeout=15
-        )
-        git_resp.raise_for_status()
-        snapshot_id = git_resp.json().get('snapshot_id', 'N/A')
-        logging.info(f"[WIKI] Step 6 SUCCESS: Snapshot created: {snapshot_id}")
-    except Exception as e:
-        # This step failing is not critical; we log but don't fail the whole job
-        logging.warning(f"[WIKI] Step 6 WARNING: Git snapshot failed: {e}. Continuing.")
-
-    # Success!
-    logging.info(f"[WIKI] Wiki generation completed for project {project_id}")
-    return {
-        "files_created": saved_count,
-        "relationships_extracted": len(relationships),
-        "entities_processed": len(generated_files),
-        "message": f"Successfully generated {saved_count} wiki files with {len(relationships)} relationship triples."
-    }
+        logging.error(f"[WIKI] Wiki generation saga failed with exception: {e}")
+        # The saga has already been rolled back automatically
+        raise Exception(f"Wiki generation failed and was rolled back: {e}")
 
 
 # --- WIKI Generation Endpoint ---
