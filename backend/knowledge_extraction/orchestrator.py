@@ -1,8 +1,10 @@
 """Knowledge Extraction Orchestrator - Main workflow controller."""
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Tuple
 import sys
 import logging
+import json
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -189,3 +191,83 @@ class KnowledgeExtractor:
             'total_profiles': len(list(self.kb_path.glob('*.md'))),
             'kb_path': str(self.kb_path),
         }
+
+    def extract_relationships(self, text: str) -> List[Tuple[str, str, str]]:
+        """
+        Extract relationship triples from text using the relationship extraction prompt.
+        
+        Returns:
+            List of tuples: [(entity1, relationship_type, entity2), ...]
+        """
+        if not self.ai:
+            logger.warning("GeorgeAI not initialized. Cannot extract relationships.")
+            return []
+        
+        # Build the entities list for the prompt
+        entity_names = list(self.entities.keys()) if self.entities else []
+        entities_str = ", ".join(entity_names) if entity_names else "NO_ENTITIES_FOUND"
+        
+        # Load the relationship extraction prompt
+        prompt_path = Path(__file__).parent.parent / "prompts" / "relationship_extractor.txt"
+        try:
+            with open(prompt_path, 'r') as f:
+                prompt_template = f.read()
+        except FileNotFoundError:
+            logger.error(f"Relationship extractor prompt not found at {prompt_path}")
+            return []
+        
+        # Format the prompt
+        prompt = prompt_template.format(
+            entities_list=entities_str,
+            text=text
+        )
+        
+        # Call AI to extract relationships
+        try:
+            result = self.ai.chat(prompt)
+            response_text = result.get('response', '') if isinstance(result, dict) else str(result)
+        except Exception as e:
+            logger.error(f"Failed to call AI for relationship extraction: {e}")
+            return []
+        
+        # Parse the response to extract relationship triples
+        relationships = self._parse_relationships(response_text, entity_names)
+        logger.info(f"Extracted {len(relationships)} relationships")
+        return relationships
+    
+    def _parse_relationships(self, response_text: str, valid_entities: List[str]) -> List[Tuple[str, str, str]]:
+        """
+        Parse relationship triples from AI response.
+        Expected format: (ENTITY_1, RELATIONSHIP_TYPE, ENTITY_2)
+        
+        Args:
+            response_text: Raw response from AI
+            valid_entities: List of valid entity names to validate against
+            
+        Returns:
+            List of validated relationship tuples
+        """
+        relationships = []
+        lines = response_text.strip().split('\n')
+        
+        # Regex to match: (entity1, relationship, entity2)
+        pattern = r'\(([^,]+),\s*([^,]+),\s*([^)]+)\)'
+        
+        for line in lines:
+            line = line.strip()
+            if not line or line == "(NO_RELATIONSHIPS_FOUND)":
+                continue
+            
+            match = re.match(pattern, line)
+            if match:
+                entity1 = match.group(1).strip()
+                rel_type = match.group(2).strip()
+                entity2 = match.group(3).strip()
+                
+                # Validate that entities exist (optional: can be relaxed if needed)
+                # For now, we'll accept any entities as the AI may find variations
+                if entity1 and rel_type and entity2:
+                    relationships.append((entity1, rel_type, entity2))
+                    logger.debug(f"Parsed relationship: ({entity1}, {rel_type}, {entity2})")
+        
+        return relationships

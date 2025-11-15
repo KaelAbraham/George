@@ -138,6 +138,22 @@ services:
     networks:
       - caudexnet
 
+  ############################################################
+  # GRAPH DATABASE — Neo4j for Knowledge Graph Storage
+  ############################################################
+  graph_server:
+    image: neo4j:latest
+    container_name: graph_server
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - ./persistent_data/graph_db:/data
+    environment:
+      - NEO4J_AUTH=none
+    networks:
+      - caudexnet
+
 networks:
   caudexnet:
     driver: bridge

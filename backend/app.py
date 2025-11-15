@@ -9,9 +9,11 @@ from datetime import datetime
 from flask import Flask, request, jsonify, make_response
 from flask.views import MethodView
 from dotenv import load_dotenv
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Literal
 from flask_smorest import Api, abort
 from flask_cors import CORS
+from neo4j import GraphDatabase
+from pydantic import BaseModel, ValidationError
 
 # --- Local Imports ---
 # These are the new foundational services we just planned
@@ -77,6 +79,7 @@ BILLING_SERVER_URL = os.environ.get("BILLING_SERVER_URL", "http://localhost:5004
 CHROMA_SERVER_URL = os.environ.get("CHROMA_SERVER_URL", "http://localhost:5002")
 FILESYSTEM_SERVER_URL = os.environ.get("FILESYSTEM_SERVER_URL", "http://localhost:5001")
 GIT_SERVER_URL = os.environ.get("GIT_SERVER_URL", "http://localhost:5003")
+GRAPH_SERVER_URL = os.environ.get("GRAPH_SERVER_URL", "bolt://localhost:7687")
 
 
 # --- Constants ---
@@ -203,6 +206,22 @@ GEORGE_CONSTITUTION = load_prompt('george_operational_protocol.txt')
 AI_ROUTER_PROMPT_v4 = load_prompt('ai_router_v3.txt')  # Use v3 as fallback
 COREF_RESOLUTION_PROMPT = load_prompt('query_rewriter.txt')  # Use query_rewriter as coreference resolution
 POLISH_PROMPT = load_prompt('georgeification_polish.txt')  # Correct filename
+
+# --- Pydantic Models for Type-Safe LLM Output Validation ---
+
+class TriageData(BaseModel):
+    """
+    Pydantic model to validate the output from the Triage LLM (Call 1).
+    Ensures the output is predictable and type-safe.
+    
+    Fields:
+        intent: The detected intent (e.g., "craft_guidance", "complex_analysis", "app_support")
+        knowledge_source: Which knowledge base to query (e.g., "PROJECT_KB", "CAUDEX_SUPPORT_KB", "NONE")
+        requires_memory: Whether the query needs chat history context for coreference resolution
+    """
+    intent: str
+    knowledge_source: str
+    requires_memory: bool
 
 # --- Marshmallow Schemas for Request/Response Validation ---
 import marshmallow as ma
@@ -484,8 +503,7 @@ class Chat(MethodView):
         try:
             # --- CALL 1: TRIAGE ---
             triage_data = get_triage_data(user_query, project_id)
-            triage_data['original_query'] = user_query
-            intent = triage_data.get('intent')
+            intent = triage_data.intent
             
             # --- GUARDRAILS ---
             if intent == "creative_task":
@@ -501,22 +519,35 @@ class Chat(MethodView):
                 return {"response": response_text}
 
             # --- CALL 1.5: MEMORY & REWRITE ---
-            rewritten_query, chat_history_str, history_list = resolve_memory(triage_data, user_id, project_id)
+            rewritten_query, chat_history_str, history_list = resolve_memory(triage_data, user_query, user_id, project_id)
 
-            # --- RESOURCE GATHERING ---
+            # --- RESOURCE GATHERING (RAG) ---
             kb_name = ""
-            if triage_data.get('knowledge_source') == "PROJECT_KB":
+            if triage_data.knowledge_source == "PROJECT_KB":
                 kb_name = f"project_{project_id}"
-            elif triage_data.get('knowledge_source') == "CAUDEX_SUPPORT_KB":
+            elif triage_data.knowledge_source == "CAUDEX_SUPPORT_KB":
                 kb_name = "george_craft_library"  # Your static craft guides
             # Add future "EXTERNAL_API" logic here
             
-            context_str, context_success = get_chroma_context(rewritten_query, kb_name)
+            # Get context from vector database (Chroma)
+            chroma_context, chroma_success = get_chroma_context(rewritten_query, kb_name)
             
             # RESILIENCE CHECK: If Chroma failed, abort gracefully with 503
-            if not context_success:
+            if not chroma_success:
                 logger.error(f"[RESILIENCE] Aborting chat for user {user_id} due to Chroma failure.")
                 abort(503, message="Your knowledge base is temporarily unavailable. Please try again in a moment.")
+            
+            # Get context from knowledge graph (Neo4j) - graceful degradation if unavailable
+            graph_context, graph_success = get_graph_context(rewritten_query, project_id)
+            if not graph_success:
+                logger.warning(f"[GRACEFUL] Graph context unavailable, continuing with Chroma context only.")
+            
+            # Combine contexts: vector DB + relationship graph
+            context_str = chroma_context
+            if graph_context:
+                context_str = f"{chroma_context}\n\n{graph_context}" if chroma_context else graph_context
+            
+            logging.debug(f"[RAG] Combined context: {len(context_str)} chars from Chroma + {len(graph_context)} chars from Graph")
 
             # --- CALL 2: EXECUTION & COST GOVERNOR ---
             
@@ -598,6 +629,13 @@ class Chat(MethodView):
             polish_result = polish_client.chat(polish_prompt)
             final_answer = polish_result['response']
             
+            # --- NEW: FINAL GUARDRAIL CHECK ---
+            # Check if the polish model detected a violation from Call 2
+            if "[COMPLIANCE_ERROR]" in final_answer:
+                logging.warning(f"CRITICAL: Call 2 (Answer) failed protocol. Call 3 (Polish) caught the violation. Aborting.")
+                # We log the specific error but return a generic, safe message to the user
+                return jsonify({"error": "I was unable to process that request in a way that aligns with my operational protocol."}), 500
+
             # --- SAVE & RESPOND ---
             message_id = session_manager.add_turn(project_id, user_id, user_query, final_answer)
             
@@ -818,6 +856,66 @@ class ProjectJobs(MethodView):
         
         return {"project_id": project_id, "jobs": jobs}
 
+# --- Graph Database Helper Functions ---
+
+def _get_graph_driver():
+    """
+    Get a Neo4j driver instance.
+    Returns None if connection fails (error is logged).
+    """
+    try:
+        driver = GraphDatabase.driver(GRAPH_SERVER_URL, auth=None)
+        return driver
+    except Exception as e:
+        logging.error(f"[GRAPH] Failed to connect to Neo4j at {GRAPH_SERVER_URL}: {e}")
+        return None
+
+def _save_relationships_to_graph(project_id: str, relationships: List[Tuple[str, str, str]]) -> bool:
+    """
+    Save extracted relationships to Neo4j graph database.
+    
+    Args:
+        project_id: Project identifier for scoping nodes
+        relationships: List of (entity1, relationship_type, entity2) tuples
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    if not relationships:
+        logging.info(f"[GRAPH] No relationships to save for project {project_id}")
+        return True
+    
+    driver = _get_graph_driver()
+    if not driver:
+        logging.error("[GRAPH] Could not establish Neo4j connection")
+        return False
+    
+    try:
+        with driver.session() as session:
+            for entity1, rel_type, entity2 in relationships:
+                # Create nodes with project scope
+                cypher = f"""
+                    MERGE (n1:Entity {{name: $entity1, project_id: $project_id}})
+                    MERGE (n2:Entity {{name: $entity2, project_id: $project_id}})
+                    MERGE (n1)-[r:{rel_type}]->(n2)
+                    SET r.project_id = $project_id
+                """
+                session.run(
+                    cypher,
+                    entity1=entity1,
+                    entity2=entity2,
+                    project_id=project_id
+                )
+                logging.debug(f"[GRAPH] Stored: ({entity1}, {rel_type}, {entity2})")
+        
+        logging.info(f"[GRAPH] Successfully saved {len(relationships)} relationships to Neo4j")
+        return True
+    except Exception as e:
+        logging.error(f"[GRAPH] Failed to save relationships: {e}")
+        return False
+    finally:
+        driver.close()
+
 # --- WIKI Generation Task Helper Function ---
 def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
     """
@@ -826,8 +924,10 @@ def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
     Steps:
     1. Get all chunks from chroma_server
     2. Call KnowledgeExtractionOrchestrator to generate wiki files
-    3. Save files using filesystem_server
-    4. Create Git snapshot
+    3. Extract relationships from documents
+    4. Save relationships to Neo4j graph database
+    5. Save files using filesystem_server
+    6. Create Git snapshot
     """
     logging.info(f"[WIKI] Starting wiki generation for project {project_id}")
     collection_name = f"project_{project_id}"
@@ -861,8 +961,37 @@ def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
         logging.error(f"[WIKI] Step 2 FAILED: {e}")
         raise Exception(f"Failed to generate wiki files: {e}")
 
-    # Step 3: Save files using filesystem_server
-    logging.info(f"[WIKI] Step 3: Saving files via filesystem_server...")
+    # Step 3: Extract relationships from documents for knowledge graph
+    logging.info(f"[WIKI] Step 3: Extracting relationships from documents...")
+    relationships = []
+    try:
+        # Combine all document text for relationship extraction
+        combined_text = "\n\n".join(all_docs[:10])  # Use first 10 docs to avoid token limits
+        
+        if orchestrator:
+            relationships = orchestrator.extract_relationships(combined_text)
+            logging.info(f"[WIKI] Step 3 SUCCESS: Extracted {len(relationships)} relationships.")
+        else:
+            logging.warning(f"[WIKI] Step 3 SKIPPED: Orchestrator not available for relationship extraction.")
+    except Exception as e:
+        logging.warning(f"[WIKI] Step 3 WARNING: Relationship extraction failed: {e}. Continuing without graph data.")
+
+    # Step 4: Save relationships to Neo4j graph database
+    logging.info(f"[WIKI] Step 4: Saving relationships to graph database...")
+    try:
+        if relationships:
+            graph_success = _save_relationships_to_graph(project_id, relationships)
+            if graph_success:
+                logging.info(f"[WIKI] Step 4 SUCCESS: Graph database updated with {len(relationships)} relationships.")
+            else:
+                logging.warning(f"[WIKI] Step 4 WARNING: Graph database update failed. Continuing.")
+        else:
+            logging.info(f"[WIKI] Step 4 SKIPPED: No relationships to store.")
+    except Exception as e:
+        logging.warning(f"[WIKI] Step 4 WARNING: Graph storage failed: {e}. Continuing.")
+
+    # Step 5: Save files using filesystem_server
+    logging.info(f"[WIKI] Step 5: Saving files via filesystem_server...")
     saved_count = 0
     try:
         for file_data in generated_files:
@@ -881,36 +1010,38 @@ def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
                 saved_count += 1
                 logging.debug(f"[WIKI] Saved {file_data.get('filename', 'unknown')}")
         
-        logging.info(f"[WIKI] Step 3 SUCCESS: Saved {saved_count}/{len(generated_files)} files.")
+        logging.info(f"[WIKI] Step 5 SUCCESS: Saved {saved_count}/{len(generated_files)} files.")
     except Exception as e:
-        logging.error(f"[WIKI] Step 3 FAILED: {e}")
+        logging.error(f"[WIKI] Step 5 FAILED: {e}")
         raise Exception(f"Failed to save generated files: {e}")
 
-    # Step 4: Create Git snapshot
-    logging.info(f"[WIKI] Step 4: Creating Git snapshot...")
+    # Step 6: Create Git snapshot
+    logging.info(f"[WIKI] Step 6: Creating Git snapshot...")
     try:
         git_resp = requests.post(
             f"{GIT_SERVER_URL}/snapshot/{project_id}",
             json={
                 "user_id": user_id,
-                "message": f"Auto-generated wiki with {saved_count} files."
+                "message": f"Auto-generated wiki with {saved_count} files and {len(relationships)} relationships."
             },
             timeout=15
         )
         git_resp.raise_for_status()
         snapshot_id = git_resp.json().get('snapshot_id', 'N/A')
-        logging.info(f"[WIKI] Step 4 SUCCESS: Snapshot created: {snapshot_id}")
+        logging.info(f"[WIKI] Step 6 SUCCESS: Snapshot created: {snapshot_id}")
     except Exception as e:
         # This step failing is not critical; we log but don't fail the whole job
-        logging.warning(f"[WIKI] Step 4 WARNING: Git snapshot failed: {e}. Continuing.")
+        logging.warning(f"[WIKI] Step 6 WARNING: Git snapshot failed: {e}. Continuing.")
 
     # Success!
     logging.info(f"[WIKI] Wiki generation completed for project {project_id}")
     return {
         "files_created": saved_count,
+        "relationships_extracted": len(relationships),
         "entities_processed": len(generated_files),
-        "message": f"Successfully generated and saved {saved_count} wiki files."
+        "message": f"Successfully generated {saved_count} wiki files with {len(relationships)} relationship triples."
     }
+
 
 # --- WIKI Generation Endpoint ---
 
@@ -1077,38 +1208,77 @@ def deduct_cost(user_id: str, job_id: str, cost: float, description: str):
         logging.error(f"Failed to deduct cost for {user_id}: {e}. Logging for reconciliation.")
         failed_tx_logger.log_failure(user_id, job_id, cost, description)
 
-def get_triage_data(user_query: str, project_id: str) -> Dict[str, Any]:
-    """Call 1: Triage. Determines intent, knowledge source, and memory needs."""
+def get_triage_data(user_query: str, project_id: str) -> TriageData:
+    """
+    Call 1: Triage. Determines intent, knowledge source, and memory needs.
+    
+    Uses Pydantic validation to ensure the LLM output is type-safe and complete.
+    
+    Args:
+        user_query: The user's natural language query
+        project_id: Project identifier for context
+    
+    Returns:
+        TriageData object with validated intent, knowledge_source, and requires_memory
+    
+    Raises:
+        Returns safe defaults on any validation or API error
+    """
+    # Safe fallback object
+    fallback_data = TriageData(
+        intent="app_support",
+        knowledge_source="CAUDEX_SUPPORT_KB",
+        requires_memory=False
+    )
+    
     prompt = AI_ROUTER_PROMPT_v4.format(user_query=user_query, project_id=project_id)
-    result = triage_client.chat(prompt)
+    
     try:
-        # The prompt asks for minified JSON
-        data = json.loads(result['response'])
+        result_dict = triage_client.chat(prompt)
+        response_text = result_dict.get('response', '').strip()
+        
+        # 1. Try to validate the raw JSON string using Pydantic
+        data = TriageData.model_validate_json(response_text)
+        logging.info(f"✓ Triage validated: intent={data.intent}, source={data.knowledge_source}, memory={data.requires_memory}")
         return data
+        
+    except ValidationError as e:
+        # 2. The LLM's JSON was malformed (e.g., missing required key, wrong type)
+        logging.warning(f"[TRIAGE] Pydantic validation failed: {e}. Defaulting to safe fallback.")
+        logging.debug(f"[TRIAGE] Raw response was: {response_text[:200]}")
+        return fallback_data
+    
     except Exception as e:
-        logging.error(f"Failed to parse triage JSON: {e}. Defaulting to craft.")
-        # Fallback to a safe, known state
-        return {"intent": "app_support", "knowledge_source": "CAUDEX_SUPPORT_KB", "requires_memory": False}
+        # 3. A different error occurred (API call failure, etc.)
+        logging.error(f"[TRIAGE] Unexpected error during triage: {e}. Defaulting to safe fallback.", exc_info=True)
+        return fallback_data
 
-def resolve_memory(triage_data: Dict, user_id: str, project_id: str) -> Tuple[str, str, List[Dict]]:
+def resolve_memory(triage_data: TriageData, user_query: str, user_id: str, project_id: str) -> Tuple[str, str, List[Dict]]:
     """
     Handles Step 1.5 (Memory & Rewrite).
-    Returns: (rewritten_query, chat_history_for_prompt, chat_history_for_llm)
+    
+    Args:
+        triage_data: Validated TriageData from Call 1
+        user_query: Original user query
+        user_id: User identifier
+        project_id: Project identifier
+    
+    Returns:
+        (rewritten_query, chat_history_for_prompt, chat_history_for_llm)
     """
-    user_query = triage_data['original_query']
-    if not triage_data.get('requires_memory', False):
-        return user_query, "", [] # No rewrite needed, no history list
+    if not triage_data.requires_memory:
+        return user_query, "", []  # No rewrite needed, no history list
 
     logging.info(f"Query '{user_query}' requires memory. Fetching history...")
     history_list = session_manager.get_recent_history(project_id, user_id)
     chat_history_str = session_manager.format_history_for_prompt(history_list)
     
-    # Call 1.5: Rewrite query
+    # Call 1.5: Rewrite query using coreference resolution
     rewrite_prompt = COREF_RESOLUTION_PROMPT.format(
         chat_history=chat_history_str,
         user_query=user_query
     )
-    result = triage_client.chat(rewrite_prompt) # Use the cheap client
+    result = triage_client.chat(rewrite_prompt)  # Use the cheap client
     
     rewritten_query = result['response'].strip()
     logging.info(f"Query rewritten: '{user_query}' -> '{rewritten_query}'")
@@ -1150,6 +1320,90 @@ def get_chroma_context(query: str, collection_name: str) -> Tuple[Optional[str],
     except Exception as e:
         logging.error(f"Failed to get context from Chroma: {e}")
         return None, False  # Failure
+
+def _generate_cypher_query(user_query: str) -> Optional[str]:
+    """
+    Use AI to generate a Cypher query from a natural language question.
+    This allows semantic understanding of graph patterns.
+    
+    Args:
+        user_query: Natural language question from the user
+    
+    Returns:
+        Cypher query string, or None if generation fails
+    """
+    prompt = f"""You are a Neo4j Cypher query expert. Convert the user's natural language question into a Cypher query.
+
+User Question: {user_query}
+
+Return ONLY the Cypher query, nothing else. Example format:
+MATCH (e1:Entity)-[r]->(e2:Entity) WHERE e1.name CONTAINS 'keyword' RETURN e1.name, r.type, e2.name
+
+Your Cypher query:"""
+    
+    try:
+        result = triage_client.chat(prompt)
+        cypher_query = result.get('response', '').strip()
+        if cypher_query:
+            logging.debug(f"[GRAPH] Generated Cypher: {cypher_query}")
+            return cypher_query
+    except Exception as e:
+        logging.warning(f"[GRAPH] Failed to generate Cypher query: {e}")
+    
+    return None
+
+def get_graph_context(user_query: str, project_id: str) -> Tuple[str, bool]:
+    """
+    Query the Neo4j graph database for relationship-based context.
+    
+    Args:
+        user_query: User's natural language question
+        project_id: Project ID for scoping graph queries
+    
+    Returns:
+        (context_str, True) on success (even if empty)
+        (context_str, False) on connection failure (still returns empty string for graceful degradation)
+    """
+    driver = _get_graph_driver()
+    if not driver:
+        logging.warning("[GRAPH] Graph database unavailable, skipping graph context.")
+        return "", True  # Graceful degradation: return empty but mark as "success"
+    
+    try:
+        # Generate a Cypher query from the user's question
+        cypher_query = _generate_cypher_query(user_query)
+        if not cypher_query:
+            logging.debug("[GRAPH] No Cypher query generated.")
+            return "", True
+        
+        # Add project scoping to the query if not already present
+        if "project_id" not in cypher_query:
+            cypher_query += f" WHERE (e1.project_id = '{project_id}' OR e2.project_id = '{project_id}')"
+        
+        with driver.session() as session:
+            results = session.run(cypher_query)
+            records = results.data()
+            
+            if not records:
+                logging.debug(f"[GRAPH] Query returned no results: {cypher_query}")
+                return "", True
+            
+            # Format results as readable context
+            context_lines = ["[Knowledge Graph Relationships:]\n"]
+            for record in records[:10]:  # Limit to 10 results
+                # Records are dictionaries; convert to readable format
+                line = " → ".join(str(v) for v in record.values())
+                context_lines.append(f"  • {line}")
+            
+            graph_context = "\n".join(context_lines)
+            logging.info(f"[GRAPH] Retrieved {len(records)} relationship records.")
+            return graph_context, True
+            
+    except Exception as e:
+        logging.warning(f"[GRAPH] Failed to query graph: {e}")
+        return "", True  # Graceful degradation
+    finally:
+        driver.close()
 
 # --- Core Chat Endpoint ---
 

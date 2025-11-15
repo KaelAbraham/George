@@ -15,3 +15,7 @@ python-dotenv>=1.0.0
 
 # File handling
 Werkzeug>=3.0.1
+
+# Graph Database
+neo4j>=5.0.0
+
