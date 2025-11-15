@@ -362,16 +362,17 @@ def grant_access(user_id):
     if not target_email or not project_id:
         return jsonify({"error": "target_email and project_id are required"}), 400
     
+    # 2. AUTHORIZATION: Verify user owns this project
+    if not auth_manager.user_owns_project(user_id, project_id):
+        logger.warning(f"{user_id} attempted to grant access to project they do not own: {project_id}")
+        return jsonify({"error": "Forbidden"}), 403
+    
     try:
-        # 2. AUTHORIZATION: Verify owner owns this project
-        # (This depends on your project ownership model - add if needed)
-        # For now, we'll assume the auth_manager handles ownership checks
-        
-        # Find target user by email (Firebase Admin SDK)
+        # 3. Find target user by email (Firebase Admin SDK)
         user = auth.get_user_by_email(target_email)
         target_uid = user.uid
         
-        # Grant access
+        # 4. Grant access
         auth_manager.grant_project_access(project_id, target_uid)
         logger.info(f"Access granted by {user_id} to {target_email} for project {project_id}")
         

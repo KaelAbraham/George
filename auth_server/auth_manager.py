@@ -5,6 +5,8 @@ Manages user roles, invite codes, and project permissions.
 
 import sqlite3
 import logging
+import requests
+import os
 from pathlib import Path
 from datetime import datetime
 
@@ -417,4 +419,44 @@ class AuthManager:
             return True
         except sqlite3.Error as e:
             logger.error(f"Error revoking project access: {e}")
+            return False
+
+    def user_owns_project(self, user_id: str, project_id: str) -> bool:
+        """
+        Check if a user owns a project.
+        
+        A user owns a project if they are the creator (the project directory
+        exists under their user_id in the filesystem_server).
+        
+        This is determined by calling the filesystem_server to check if the
+        project path PROJECTS_FOLDER/{user_id}/{project_id} exists.
+        
+        Args:
+            user_id: The user's Firebase UID
+            project_id: The project ID to check ownership of
+            
+        Returns:
+            True if user owns the project, False otherwise
+        """
+        try:
+            # Get the filesystem server URL from environment
+            filesystem_server_url = os.getenv("FILESYSTEM_SERVER_URL", "http://localhost:6005")
+            
+            # Call filesystem_server to check if project exists for this user
+            resp = requests.get(
+                f"{filesystem_server_url}/project/{project_id}/files",
+                headers={"X-User-ID": user_id, "X-INTERNAL-TOKEN": os.getenv("INTERNAL_SERVICE_TOKEN", "")},
+                timeout=3
+            )
+            
+            # If filesystem_server returns 200 OK, the project exists for this user
+            if resp.status_code == 200:
+                logger.debug(f"User {user_id} verified as owner of project {project_id}")
+                return True
+            
+            logger.warning(f"User {user_id} does not own project {project_id}")
+            return False
+        except Exception as e:
+            logger.error(f"Error checking project ownership for {user_id}/{project_id}: {e}")
+            # Fail secure - if we can't verify ownership, deny access
             return False
