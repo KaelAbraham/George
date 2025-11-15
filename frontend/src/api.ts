@@ -5,6 +5,13 @@ export interface AuthPayload {
   password: string;
 }
 
+export interface RegisterPayload {
+  name?: string;
+  email: string;
+  password: string;
+  invite_code: string;
+}
+
 export interface User {
   uid: string;
   email: string;
@@ -24,6 +31,15 @@ export const login = async (payload: AuthPayload): Promise<User> => {
     const { data } = await axiosInstance.post('/auth/login', payload);
     // The backend sets the cookie; we just return the user object
     return data.user;
+  } catch (error) {
+    throw error;
+  }
+};
+
+export const register = async (payload: RegisterPayload): Promise<{ success: boolean; message: string }> => {
+  try {
+    const { data } = await axiosInstance.post('/auth/register', payload);
+    return data;
   } catch (error) {
     throw error;
   }

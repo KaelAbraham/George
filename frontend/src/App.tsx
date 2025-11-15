@@ -8,6 +8,7 @@ import {
 } from 'react-router-dom';
 import { AppProvider, AppContext } from './contexts/AppContext';
 import { LoginView } from './components/LoginView';
+import { RegisterView } from './components/views/RegisterView';
 
 // --- This is your main app layout ---
 const AppLayout = () => (
@@ -48,6 +49,9 @@ function App() {
         <Routes>
           {/* Public Login Route */}
           <Route path="/login" element={<LoginView />} />
+
+          {/* Public Register Route */}
+          <Route path="/register" element={<RegisterView />} />
 
           {/* Protected App Routes */}
           <Route element={<RequireAuth />}>
