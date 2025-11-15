@@ -66,14 +66,27 @@ class AuthManager:
             """)
             
             # Users table (linked to Firebase UID)
+            # IMPORTANT: No CHECK constraint on role to allow flexible role types
+            # (admin, guest, author, beta_tester, etc.) without database migrations
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id TEXT PRIMARY KEY,
                     email TEXT UNIQUE NOT NULL,
-                    role TEXT NOT NULL CHECK(role IN ('admin', 'guest')),
+                    role TEXT NOT NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     last_login DATETIME
+                )
+            """)
+            
+            # Project Ownership table - single source of truth
+            # Eliminates "filesystem as database" anti-pattern and timing attack vectors
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(owner_id) REFERENCES users(user_id)
                 )
             """)
             
@@ -95,6 +108,7 @@ class AuthManager:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_invites_type ON invites(type)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_permissions_project ON project_permissions(project_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_permissions_user ON project_permissions(user_id)")
             
@@ -379,6 +393,71 @@ class AuthManager:
             logger.error(f"Error updating last_login for user {user_id}: {e}")
             return False
 
+    # --- Project Ownership ---
+    
+    def get_project_owner(self, project_id: str) -> str:
+        """
+        Get the owner of a project from the database.
+        
+        SECURITY: This is the authoritative source for project ownership.
+        Replaces filesystem scanning which was vulnerable to timing attacks.
+        
+        Args:
+            project_id: The project ID
+            
+        Returns:
+            The owner's user_id (Firebase UID), or None if project not found
+        """
+        try:
+            with self._get_conn() as conn:
+                cursor = conn.execute(
+                    "SELECT owner_id FROM projects WHERE id = ?",
+                    (project_id,)
+                )
+                row = cursor.fetchone()
+                
+                if row:
+                    owner_id = row['owner_id']
+                    logger.debug(f"Project {project_id} is owned by {owner_id}")
+                    return owner_id
+                else:
+                    logger.debug(f"Project {project_id} not found in database")
+                    return None
+                    
+        except sqlite3.Error as e:
+            logger.error(f"Error getting project owner for {project_id}: {e}", exc_info=True)
+            return None
+
+    def register_project(self, project_id: str, owner_id: str) -> bool:
+        """
+        Register a project in the database when it's first created.
+        
+        SECURITY: Records the true owner in the database. This becomes the
+        authoritative source of truth (not filesystem scans).
+        
+        Args:
+            project_id: The project ID
+            owner_id: The owner's Firebase UID
+            
+        Returns:
+            True if successful, False if project already exists or error
+        """
+        try:
+            with self._get_conn() as conn:
+                conn.execute(
+                    "INSERT INTO projects (id, owner_id) VALUES (?, ?)",
+                    (project_id, owner_id)
+                )
+                conn.commit()
+            logger.info(f"Registered project {project_id} with owner {owner_id}")
+            return True
+        except sqlite3.IntegrityError:
+            logger.warning(f"Project {project_id} already registered")
+            return False
+        except sqlite3.Error as e:
+            logger.error(f"Error registering project {project_id}: {e}", exc_info=True)
+            return False
+
     # --- Project Permissions (Guest Pass) ---
     
     def grant_project_access(self, project_id: str, user_id: str, 
@@ -396,11 +475,16 @@ class AuthManager:
         before granting permissions. Prevents granting access to unregistered or
         deleted users.
         
+        OWNERSHIP TRACKING: Registers the project in the database if it's not already
+        registered. The caller should ensure this method is only called when granting
+        access to the project owner's own project, or when explicitly granting
+        guest access to a project owned by another user.
+        
         Args:
             project_id: The project ID
             user_id: The user's Firebase UID (must be registered in database)
             permission_level: One of 'read', 'comment', 'edit', 'admin'
-            granted_by: User ID of the person granting access
+            granted_by: User ID of the person granting access (for audit trail)
             
         Returns:
             True if permission was newly granted, False if user already had access or error occurs
@@ -416,6 +500,23 @@ class AuthManager:
                 if not exists:
                     logger.warning(f"Cannot grant access: user {user_id} not registered in database")
                     return False
+                
+                # OWNERSHIP TRACKING: If this is being granted by someone, ensure project is registered
+                # If granted_by is provided (someone is granting access to another user),
+                # make sure the project exists in our database
+                if granted_by:
+                    # Ensure project exists (if not, insert it with the grantee as owner)
+                    existing = conn.execute(
+                        "SELECT owner_id FROM projects WHERE id = ?", (project_id,)
+                    ).fetchone()
+                    
+                    if not existing:
+                        # Project not registered yet - register it with the grantee as owner
+                        conn.execute(
+                            "INSERT INTO projects (id, owner_id) VALUES (?, ?)",
+                            (project_id, granted_by)
+                        )
+                        logger.info(f"Registered project {project_id} with owner {granted_by}")
                 
                 # User exists, attempt to grant access
                 # Use INSERT ... ON CONFLICT DO NOTHING to prevent silent overwrites

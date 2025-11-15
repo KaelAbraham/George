@@ -8,16 +8,23 @@ This module provides race-condition-safe billing operations:
 4. Rollback on failure: Release reserved funds automatically
 
 This ensures the user gets the answer XOR the user gets charged, never both or neither.
+
+RESILIENCE: This module uses dependency injection for the billing_client to ensure
+all billing calls are resilient with automatic retries, circuit breaker protection,
+and fail-open semantics. The ResilientServiceClient is passed in at initialization
+rather than creating a brittle requests.Session() internally.
 """
 
 import logging
-import requests
 import uuid
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING
 from enum import Enum
 from datetime import datetime
 from pathlib import Path
 import sqlite3
+
+if TYPE_CHECKING:
+    from service_utils import ResilientServiceClient
 
 logger = logging.getLogger(__name__)
 
@@ -45,19 +52,34 @@ class CostTracker:
     - Idempotent job IDs prevent double-charging
     - Automatic rollback on failure
     - Persistent tracking for reconciliation
+    
+    RESILIENCE: Uses dependency injection for billing_client to ensure all
+    calls benefit from automatic retries, exponential backoff, circuit breaker,
+    and fail-open semantics via ResilientServiceClient.
     """
     
-    def __init__(self, billing_server_url: str, internal_headers: Dict[str, str], 
+    def __init__(self, billing_client: "ResilientServiceClient", 
+                 internal_headers: Dict[str, str], 
                  db_path: str = "data/cost_reservations.db"):
         """
-        Initialize CostTracker.
+        Initialize CostTracker with dependency injection.
         
         Args:
-            billing_server_url: URL of billing service (e.g., http://localhost:6004)
+            billing_client: ResilientServiceClient instance (injected dependency)
+                           All billing calls will use this resilient client
+                           with automatic retries, circuit breaker, and fail-open
             internal_headers: Dict with X-INTERNAL-TOKEN for inter-service auth
             db_path: Path to SQLite DB for tracking reservations
+            
+        RESILIENCE: The billing_client is passed in, not created here. This allows
+        the caller (backend/app.py) to configure retry/timeout behavior centrally.
+        The ResilientServiceClient automatically handles:
+        - Retries on transient failures
+        - Exponential backoff
+        - Circuit breaker (detects repeated failures)
+        - Proper error handling and logging
         """
-        self.billing_server_url = billing_server_url
+        self.billing_client = billing_client
         self.internal_headers = internal_headers
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,6 +160,11 @@ class CostTracker:
         - If reserve succeeds, funds are held
         - Later we capture actual cost or release funds
         
+        RESILIENCE: Uses injected billing_client with automatic retries and
+        circuit breaker. If the circuit breaker is open (billing service down),
+        returns None to deny the request. This is correct: better to deny than
+        to charge unpredictably.
+        
         Args:
             user_id: User making the request
             estimated_cost: Estimated cost in dollars (e.g., 0.05)
@@ -146,20 +173,21 @@ class CostTracker:
             reservation_id: Unique ID for this reservation (track this)
             None: If pre-auth fails (user insufficient funds or service error)
         """
+        from service_utils import ServiceUnavailable
+        
         reservation_id = f"res-{uuid.uuid4()}"
         
         try:
             logger.info(f"[PREAUTH] Reserving ${estimated_cost:.6f} for user {user_id}")
             
-            resp = requests.post(
-                f"{self.billing_server_url}/reserve",
+            resp = self.billing_client.post(
+                "/reserve",
                 json={
                     "user_id": user_id,
                     "reservation_id": reservation_id,
                     "estimated_cost": estimated_cost
                 },
-                headers=self.internal_headers,
-                timeout=3.0
+                headers=self.internal_headers
             )
             
             if resp.status_code == 200:
@@ -181,9 +209,12 @@ class CostTracker:
                                         ReservationState.EXPIRED.value)
                 logger.error(f"[PREAUTH] ✗ Unexpected response: {error_msg}")
                 return None
-                
-        except requests.Timeout:
-            logger.error(f"[PREAUTH] ✗ Timeout reserving funds for {user_id}")
+        
+        except ServiceUnavailable:
+            # Circuit breaker is open (service repeatedly failed)
+            # This is correct behavior: deny the request rather than proceeding
+            # without being able to charge (or vice versa)
+            logger.error(f"[PREAUTH] ✗ Billing service unavailable (circuit breaker open) for user {user_id}")
             self._record_reservation(reservation_id, user_id, estimated_cost, 
                                     ReservationState.EXPIRED.value)
             return None
@@ -198,8 +229,12 @@ class CostTracker:
         """
         CAPTURE: Charge the actual cost after operation succeeds.
         
-        This converts the hold into a real charge. The idempotent job_id ensures
+        This converts the hold into a real charge. The idempotent reservation_id ensures
         that if this request is retried, the server won't double-charge.
+        
+        RESILIENCE: Uses injected billing_client with automatic retries and circuit breaker.
+        On repeated failures, returns False but reserves funds stay held. User can retry
+        the chat later, or admin can manually reconcile.
         
         Args:
             reservation_id: The reservation ID from reserve_funds()
@@ -209,17 +244,18 @@ class CostTracker:
             True: Charge successful
             False: Charge failed (funds still held, can retry or release)
         """
+        from service_utils import ServiceUnavailable
+        
         try:
             logger.info(f"[CAPTURE] Capturing ${actual_cost:.6f} for reservation {reservation_id}")
             
-            resp = requests.post(
-                f"{self.billing_server_url}/capture",
+            resp = self.billing_client.post(
+                "/capture",
                 json={
                     "reservation_id": reservation_id,
                     "actual_cost": actual_cost
                 },
-                headers=self.internal_headers,
-                timeout=3.0
+                headers=self.internal_headers
             )
             
             if resp.status_code == 200:
@@ -240,9 +276,14 @@ class CostTracker:
                                         error_message=error_msg)
                 logger.error(f"[CAPTURE] ✗ Capture failed: {error_msg}")
                 return False
-                
-        except requests.Timeout:
-            logger.error(f"[CAPTURE] ✗ Timeout capturing funds for {reservation_id}")
+        
+        except ServiceUnavailable:
+            # Circuit breaker open: service repeatedly failed
+            # Log for reconciliation: user got answer, but we couldn't charge
+            logger.error(f"[CAPTURE] ✗ Billing service unavailable (circuit breaker open) for {reservation_id}")
+            logger.error(f"[CAPTURE] ⚠ USER GOT ANSWER WITHOUT CHARGE - manual reconciliation needed")
+            # Still return False so caller knows the charge wasn't applied
+            # The local DB will help us reconcile later
             return False
         
         except Exception as e:
@@ -256,6 +297,10 @@ class CostTracker:
         Called when the expensive operation fails (e.g., LLM times out).
         This returns the reserved funds to the user's balance.
         
+        RESILIENCE: Uses injected billing_client with automatic retries and circuit breaker.
+        If release fails, funds are still reserved (user doesn't get charged but funds held).
+        Better to be conservative: keep funds held than accidentally double-charge.
+        
         Args:
             reservation_id: The reservation ID from reserve_funds()
             
@@ -263,14 +308,15 @@ class CostTracker:
             True: Release successful
             False: Release failed (manual reconciliation needed)
         """
+        from service_utils import ServiceUnavailable
+        
         try:
             logger.info(f"[RELEASE] Releasing reservation {reservation_id}")
             
-            resp = requests.post(
-                f"{self.billing_server_url}/release",
+            resp = self.billing_client.post(
+                "/release",
                 json={"reservation_id": reservation_id},
-                headers=self.internal_headers,
-                timeout=3.0
+                headers=self.internal_headers
             )
             
             if resp.status_code == 200:
@@ -287,9 +333,12 @@ class CostTracker:
                 error_msg = resp.json().get('error', f'HTTP {resp.status_code}')
                 logger.error(f"[RELEASE] ✗ Release failed: {error_msg}")
                 return False
-                
-        except requests.Timeout:
-            logger.error(f"[RELEASE] ✗ Timeout releasing funds for {reservation_id}")
+        
+        except ServiceUnavailable:
+            # Circuit breaker open: service repeatedly failed
+            # Funds remain reserved. Better to be conservative.
+            logger.error(f"[RELEASE] ✗ Billing service unavailable (circuit breaker open) for {reservation_id}")
+            logger.warning(f"[RELEASE] ⚠ Funds still reserved - manual reconciliation needed")
             return False
         
         except Exception as e:
@@ -305,6 +354,9 @@ class CostTracker:
         through unique job IDs. The billing server stores processed job_ids and
         rejects duplicate requests.
         
+        RESILIENCE: Uses injected billing_client with automatic retries and circuit breaker.
+        If billing service is down, returns False but logs for reconciliation.
+        
         Args:
             user_id: User ID
             job_id: Unique job ID (prevents double-charging if retried)
@@ -315,19 +367,20 @@ class CostTracker:
             True: Deduction successful
             False: Deduction failed
         """
+        from service_utils import ServiceUnavailable
+        
         try:
             logger.info(f"[DEDUCT-IDEMPOTENT] Deducting ${cost:.6f} for user {user_id} (job {job_id})")
             
-            resp = requests.post(
-                f"{self.billing_server_url}/deduct",
+            resp = self.billing_client.post(
+                "/deduct",
                 json={
                     "user_id": user_id,
                     "job_id": job_id,
                     "cost": cost,
                     "description": description
                 },
-                headers=self.internal_headers,
-                timeout=2.0
+                headers=self.internal_headers
             )
             
             if resp.status_code == 200:
@@ -342,6 +395,12 @@ class CostTracker:
                 error_msg = resp.json().get('error', f'HTTP {resp.status_code}')
                 logger.error(f"[DEDUCT-IDEMPOTENT] ✗ Deduction failed: {error_msg}")
                 return False
+        
+        except ServiceUnavailable:
+            # Circuit breaker open: billing service down
+            logger.error(f"[DEDUCT-IDEMPOTENT] ✗ Billing service unavailable (circuit breaker open) for user {user_id}")
+            logger.warning(f"[DEDUCT-IDEMPOTENT] ⚠ Charge may not have been applied - manual reconciliation needed")
+            return False
                 
         except Exception as e:
             logger.error(f"[DEDUCT-IDEMPOTENT] ✗ Error deducting cost: {e}")

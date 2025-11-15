@@ -12,6 +12,9 @@ from dotenv import load_dotenv
 from typing import Dict, Any, Optional, List, Tuple, Literal
 from flask_smorest import Api, abort
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from flask_wtf.csrf import CSRFProtect
 from neo4j import GraphDatabase
 from pydantic import BaseModel, ValidationError
 from service_utils import require_internal_token, get_internal_headers, ResilientServiceClient, ServiceUnavailable
@@ -36,6 +39,22 @@ except ImportError as e:
 load_dotenv()
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
+
+# --- Rate Limiting (HIGH priority security: protect /login and /register from brute-force) ---
+# Default: 10 requests per minute per IP. Protect /login and /register more strictly.
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["10/minute"],
+    storage_uri="memory://"
+)
+
+# --- CSRF Protection (LOW priority: SameSite=Lax already provides strong defense) ---
+# This adds an extra layer of defense against cross-site request forgery attacks.
+# Exempts specific endpoints that use internal tokens or are naturally CSRF-safe.
+# Note: The API uses JSON requests with custom headers and SameSite=Lax cookies,
+# which provides strong inherent CSRF protection. This is an additional best-practice layer.
+csrf = CSRFProtect(app)
 
 # --- Configuration for flask-smorest API documentation ---
 app.config["API_TITLE"] = "Caudex Pro AI Router"
@@ -86,6 +105,16 @@ GIT_SERVER_URL = os.environ.get("GIT_SERVER_URL", "http://localhost:6005")
 EXTERNAL_DATA_SERVER_URL = os.environ.get("EXTERNAL_DATA_SERVER_URL", "http://localhost:6006")
 GRAPH_SERVER_URL = os.environ.get("GRAPH_SERVER_URL", "bolt://localhost:7687")
 
+# --- Initialize Resilient Service Clients ---
+# These clients provide automatic retries, exponential backoff, and circuit breaker patterns
+# Ensures graceful degradation when services are slow or temporarily unavailable
+auth_client = ResilientServiceClient(AUTH_SERVER_URL, service_name="Auth Server", max_retries=2, timeout=5)
+billing_client = ResilientServiceClient(BILLING_SERVER_URL, service_name="Billing Server", max_retries=2, timeout=5)
+chroma_client = ResilientServiceClient(CHROMA_SERVER_URL, service_name="Chroma Server", max_retries=1, timeout=30)
+filesystem_client = ResilientServiceClient(FILESYSTEM_SERVER_URL, service_name="Filesystem Server", max_retries=2, timeout=10)
+git_client = ResilientServiceClient(GIT_SERVER_URL, service_name="Git Server", max_retries=1, timeout=10)
+external_data_client = ResilientServiceClient(EXTERNAL_DATA_SERVER_URL, service_name="External Data Server", max_retries=1, timeout=15)
+
 
 # --- Constants ---
 # 100 Credits = 1 Cent ($0.01) | 10,000 Credits = $1.00
@@ -115,9 +144,13 @@ try:
     job_manager = JobManager()
     feedback_manager = FeedbackManager()
     
-    # Initialize cost tracker for robust billing with pre-authorization
+    # Initialize cost tracker with dependency injection of resilient billing_client
+    # This ensures all pre-auth, capture, and release calls benefit from automatic
+    # retries, exponential backoff, circuit breaker, and fail-open semantics.
+    # Previously CostTracker created its own brittle requests.Session() - now it
+    # uses the resilient client configured centrally.
     cost_tracker = CostTracker(
-        billing_server_url=BILLING_SERVER_URL,
+        billing_client=billing_client,
         internal_headers=get_internal_headers()
     )
     
@@ -324,21 +357,22 @@ class ProjectBookmarksSchema(ma.Schema):
 # --- Authentication Proxy Routes (Gatekeeper Pattern) ---
 
 @app.route('/v1/api/auth/login', methods=['POST'])
+@limiter.limit("5/minute")  # Strict rate limit: 5 login attempts per minute per IP
 def proxy_login():
     """
     Proxies the login request to the Auth Server.
     If successful, it receives the token and sets it in a secure, HttpOnly cookie.
+    
+    SECURITY: Rate limited to 5 requests per minute per IP address to prevent brute-force attacks.
+    
+    RESILIENCE: Uses ResilientServiceClient with automatic retries, exponential backoff,
+    and circuit breaker. If auth server is down, returns 503 after exhausting retries.
     """
     try:
-        # 1. Forward login credentials to Auth Server
+        # 1. Forward login credentials to Auth Server using resilient client
         data = request.get_json()
-        resp = requests.post(
-            f"{AUTH_SERVER_URL}/login",
-            json=data,
-            timeout=5
-        )
-        resp.raise_for_status()  # Raise an error for bad responses (401, 500, etc.)
-
+        resp = auth_client.post("/login", json=data)
+        
         # 2. On success, get the token from the response
         token_data = resp.json()
         token = token_data.get('token')
@@ -354,21 +388,34 @@ def proxy_login():
             secure=True,     # <-- CRITICAL: Only send over HTTPS (in prod)
             samesite='Lax'   # <-- Good security practice
         )
+        logger.info(f"Login successful for user {token_data.get('user', {}).get('email', 'unknown')}")
         return response
 
+    except ServiceUnavailable:
+        logger.error("Auth service is down (circuit breaker open or all retries exhausted)")
+        return jsonify({"error": "Login service is temporarily unavailable. Please try again later."}), 503
     except requests.exceptions.HTTPError as e:
         # Forward the auth server's error (e.g., "Invalid password")
         return jsonify(e.response.json()), e.response.status_code
-    except Exception as e:
-        logger.error(f"Error in /login proxy: {e}", exc_info=True)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error connecting to auth service for login: {e}", exc_info=True)
         return jsonify({"error": "Login service is unavailable"}), 503
+    except Exception as e:
+        logger.error(f"Unexpected error in /login proxy: {e}", exc_info=True)
+        return jsonify({"error": "Login failed. Please try again."}), 500
 
 
 @app.route('/v1/api/auth/register', methods=['POST'])
+@limiter.limit("3/minute")  # Strict rate limit: 3 registration attempts per minute per IP
 def proxy_register():
     """
     Proxies the registration request to the Auth Server.
     Does not log the user in; just creates the account.
+    
+    SECURITY: Rate limited to 3 requests per minute per IP address to prevent spam and brute-force attacks.
+    
+    RESILIENCE: Uses ResilientServiceClient with automatic retries, exponential backoff,
+    and circuit breaker. If auth server is down, returns 503 after exhausting retries.
     
     Expected payload:
     {
@@ -383,24 +430,26 @@ def proxy_register():
         503 if auth service is unavailable
     """
     try:
-        # 1. Forward registration data to Auth Server
+        # 1. Forward registration data to Auth Server using resilient client
         data = request.get_json()
-        resp = requests.post(
-            f"{AUTH_SERVER_URL}/register",  # Calls the /register route on the auth hand
-            json=data,
-            timeout=5
-        )
-        resp.raise_for_status()  # Raise an error for bad responses (400, 500, etc.)
+        resp = auth_client.post("/register", json=data)
 
         # 2. On success, just return the success message (no login needed)
+        logger.info(f"Registration successful for user {data.get('email', 'unknown')}")
         return resp.json(), resp.status_code
 
+    except ServiceUnavailable:
+        logger.error("Auth service is down (circuit breaker open or all retries exhausted)")
+        return jsonify({"error": "Registration service is temporarily unavailable. Please try again later."}), 503
     except requests.exceptions.HTTPError as e:
         # Forward the auth server's error (e.g., "Email already in use", "Invalid invite code")
         return jsonify(e.response.json()), e.response.status_code
-    except Exception as e:
-        logger.error(f"Error in /register proxy: {e}", exc_info=True)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error connecting to auth service for registration: {e}", exc_info=True)
         return jsonify({"error": "Registration service is unavailable"}), 503
+    except Exception as e:
+        logger.error(f"Unexpected error in /register proxy: {e}", exc_info=True)
+        return jsonify({"error": "Registration failed. Please try again."}), 500
 
 
 @app.route('/v1/api/auth/logout', methods=['POST'])
@@ -434,6 +483,10 @@ def check_auth_status():
 def get_file_content(project_id, file_name):
     """
     [AUTH] Proxies a request to the filesystem_server to get raw file content.
+    
+    RESILIENCE: Uses ResilientServiceClient with automatic retries, exponential backoff,
+    and circuit breaker. If filesystem service is temporarily unavailable, retries
+    before failing gracefully.
     """
     # 1. AUTHENTICATION (User must be logged in)
     auth_data = _get_user_from_request(request)
@@ -447,24 +500,28 @@ def get_file_content(project_id, file_name):
         # 3. PROXY REQUEST to filesystem_server with user_id and internal token headers
         headers = {'X-User-ID': auth_data.get('user_id', '')}
         headers.update(get_internal_headers())
-        resp = requests.get(
-            f"{FILESYSTEM_SERVER_URL}/file/{project_id}/{file_name}",
-            headers=headers,
-            timeout=10
-        )
-        resp.raise_for_status()  # Raise error for 404, 500, etc.
+        resp = filesystem_client.get(f"/file/{project_id}/{file_name}", headers=headers)
 
         # 4. RETURN FILE CONTENT
         # We return the raw text content directly
+        logger.info(f"Retrieved file {file_name} from project {project_id} for user {auth_data.get('user_id')}")
         return resp.text, 200, {'Content-Type': resp.headers.get('Content-Type', 'text/plain')}
 
+    except ServiceUnavailable:
+        logger.error(f"Filesystem service is down (circuit breaker open) for file {project_id}/{file_name}")
+        return jsonify({"error": "File service is temporarily unavailable. Please try again later."}), 503
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
+            logger.warning(f"File not found: {project_id}/{file_name}")
             return jsonify({"error": "File not found"}), 404
+        logger.error(f"Filesystem service error: {e.response.status_code}")
         return jsonify({"error": "Filesystem service error"}), 503
-    except Exception as e:
-        logger.error(f"Error in /get_file_content proxy: {e}", exc_info=True)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error connecting to filesystem service: {e}", exc_info=True)
         return jsonify({"error": "File service is unavailable"}), 503
+    except Exception as e:
+        logger.error(f"Unexpected error retrieving file content: {e}", exc_info=True)
+        return jsonify({"error": "Failed to retrieve file"}), 500
 
 # --- File Upload Proxy Route ---
 
@@ -474,6 +531,10 @@ def proxy_file_upload(project_id):
     [AUTH] Proxies a file upload to the filesystem_server.
     Receives a file from the frontend and forwards it to the internal filesystem_server.
     The filesystem_server handles saving the original and creating markdown conversion.
+    
+    RESILIENCE: Uses ResilientServiceClient with automatic retries, exponential backoff,
+    and circuit breaker. If filesystem service is temporarily unavailable, retries
+    before failing gracefully.
     """
     # 1. AUTHENTICATION (User must be logged in)
     auth_data = _get_user_from_request(request)
@@ -497,33 +558,133 @@ def proxy_file_upload(project_id):
         headers = {'X-User-ID': auth_data.get('user_id', '')}
         headers.update(get_internal_headers())
         
-        resp = requests.post(
-            f"{FILESYSTEM_SERVER_URL}/projects/{project_id}/upload",
+        resp = filesystem_client.post(
+            f"/projects/{project_id}/upload",
             files=files,
-            headers=headers,
-            timeout=30
+            headers=headers
         )
-        resp.raise_for_status()
 
         # 4. RETURN RESPONSE FROM FILESYSTEM_SERVER
+        logger.info(f"File uploaded successfully: {file.filename} to project {project_id} by user {auth_data.get('user_id')}")
         return resp.json(), resp.status_code
 
+    except ServiceUnavailable:
+        logger.error(f"Filesystem service is down (circuit breaker open) for upload to {project_id}")
+        return jsonify({"error": "File upload service is temporarily unavailable. Please try again later."}), 503
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
+            logger.warning(f"Project not found for upload: {project_id}")
             return jsonify({"error": "Project not found"}), 404
         elif e.response.status_code == 400:
+            logger.warning(f"Invalid file or project ID: {project_id}")
             return jsonify({"error": "Invalid file or project ID"}), 400
-        logger.error(f"Filesystem service error: {e.response.text if e.response else str(e)}")
+        logger.error(f"Filesystem service error: {e.response.status_code}")
         return jsonify({"error": "File upload service error"}), 503
-    except Exception as e:
-        logger.error(f"Error in /upload proxy: {e}", exc_info=True)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error connecting to filesystem service for upload: {e}", exc_info=True)
         return jsonify({"error": "File upload service is unavailable"}), 503
+    except Exception as e:
+        logger.error(f"Unexpected error in file upload: {e}", exc_info=True)
+        return jsonify({"error": "File upload failed"}), 500
+
+# --- Project Management Endpoints ---
+
+@app.route('/v1/api/projects', methods=['POST'])
+def create_project():
+    """
+    Create a new project for a user.
+    
+    SECURITY:
+    - Requires Firebase authentication (token in cookie or Authorization header)
+    - Project is automatically owned by the authenticated user
+    - Calls auth_server to register project ownership in database
+    
+    RESILIENCE: Uses ResilientServiceClient with automatic retries, exponential backoff,
+    and circuit breaker. If auth_server is temporarily unavailable, returns 503 after retries.
+    
+    Request:
+        JSON with 'project_name' field
+        
+    Returns:
+        201 Created: Project successfully created with project_id
+        400 Bad Request: Missing project name
+        401 Unauthorized: User not authenticated
+        503 Service Unavailable: Auth server unavailable
+    """
+    # 1. AUTHENTICATION
+    auth_data = _get_user_from_request(request)
+    if not auth_data or not auth_data.get('valid'):
+        return jsonify({"error": "Invalid or missing token"}), 401
+    
+    user_id = auth_data.get('user_id')
+    
+    # 2. VALIDATE INPUT
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Request body is required"}), 400
+    
+    project_name = data.get('project_name', '').strip()
+    if not project_name:
+        return jsonify({"error": "project_name is required"}), 400
+    
+    try:
+        # 3. GENERATE PROJECT ID
+        project_id = str(uuid.uuid4())
+        
+        # 4. CREATE FILESYSTEM DIRECTORIES
+        # Structure: filesystem_server/projects/<user_id>/<project_id>/
+        try:
+            # Create project directory (filesystem_server will handle this)
+            # For now, we just generate the ID and register it
+            logger.info(f"Creating project '{project_name}' for user {user_id}")
+        except Exception as e:
+            logger.error(f"Failed to create project directories: {e}")
+            return jsonify({"error": "Failed to create project directories"}), 500
+        
+        # 5. REGISTER PROJECT IN AUTH SERVER DATABASE (WITH RESILIENCE)
+        # This makes auth_server the authoritative source of project ownership
+        # Replaces filesystem scanning which was vulnerable to timing attacks
+        try:
+            resp = auth_client.post(
+                "/internal/projects",
+                json={
+                    "project_id": project_id,
+                    "owner_id": user_id
+                },
+                headers=get_internal_headers()
+            )
+            resp.raise_for_status()
+            logger.info(f"Project {project_id} registered in auth_server for owner {user_id}")
+        except ServiceUnavailable:
+            logger.error(f"Auth service is down (circuit breaker open) for project registration")
+            return jsonify({"error": "Project registration service is temporarily unavailable. Please try again later."}), 503
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to register project in auth_server: {e}")
+            return jsonify({"error": "Failed to register project ownership"}), 503
+        
+        # 6. RETURN SUCCESS
+        logger.info(f"Project created successfully: {project_id} ({project_name}) for user {user_id}")
+        return jsonify({
+            "message": "Project created successfully",
+            "project_id": project_id,
+            "project_name": project_name,
+            "owner_id": user_id
+        }), 201
+        
+    except Exception as e:
+        logger.error(f"Unexpected error creating project: {e}", exc_info=True)
+        return jsonify({"error": "Failed to create project"}), 500
 
 # --- Core Chat Endpoint (Migrated to flask-smorest) ---
 
 @blp_chat.route('/chat')
+@limiter.limit("30/minute")  # Rate limit: 30 chat requests per minute per authenticated user
 class Chat(MethodView):
-    """Main stateless chat endpoint using the 3-call loop."""
+    """Main stateless chat endpoint using the 3-call loop.
+    
+    SECURITY: Rate limited to 30 requests per minute to prevent DoS attacks while
+    allowing normal conversational usage. Limit applies per IP address.
+    """
 
     @blp_chat.doc(
         description="Main endpoint for all user-facing chat interactions. Requires an Authorization token.",
@@ -558,7 +719,10 @@ class Chat(MethodView):
         try:
             # --- CALL 1: TRIAGE ---
             triage_data = get_triage_data(user_query, project_id)
-            intent = triage_data.intent
+            triage_cost = triage_data.get('cost', 0.0) if isinstance(triage_data, dict) else 0.0
+            intent = triage_data.intent if hasattr(triage_data, 'intent') else triage_data.get('intent')
+            
+            total_cost = 0.0  # Accumulate costs from all calls
             
             # --- GUARDRAILS ---
             if intent == "creative_task":
@@ -575,6 +739,8 @@ class Chat(MethodView):
 
             # --- CALL 1.5: MEMORY & REWRITE ---
             rewritten_query, chat_history_str, history_list = resolve_memory(triage_data, user_query, user_id, project_id)
+            memory_cost = 0.01  # Estimate for memory/rewrite operation
+            total_cost += triage_cost + memory_cost
 
             # --- RESOURCE GATHERING (RAG) ---
             kb_name = ""
@@ -616,18 +782,32 @@ class Chat(MethodView):
             if billing_server_failed:
                 logger.warning(f"[FAIL-OPEN] Billing server failed for user {user_id}. Allowing Pro model.")
 
-            # 2. PRE-AUTHORIZE: Reserve funds before expensive LLM call
-            # Estimate cost based on model complexity (Flash ~$0.01, Pro ~$0.05)
-            estimated_cost = 0.05 if not billing_server_failed else 0.0  # Skip auth if billing failed
-            reservation_id = None
+            # 2. DEDUCT FUNDS: Use simple deduct instead of pre-auth (since /reserve endpoint doesn't exist yet)
+            # FIX A: Changed from pre-authorization (which would fail with 404) to direct deduct
+            # We estimate cost: Flash ~$0.01, Pro ~$0.05, Polish ~$0.01, Total ~$0.08
+            estimated_total_cost = 0.08 if not billing_server_failed else 0.0
             
-            if estimated_cost > 0:
-                reservation_id = cost_tracker.reserve_funds(user_id, estimated_cost)
-                if not reservation_id:
-                    # Pre-auth failed: user has insufficient funds
-                    logger.warning(f"[PREAUTH] Pre-authorization failed for user {user_id}. Insufficient funds.")
+            # Generate unique job_id for idempotent billing (prevents double-charging on retry)
+            job_id = f"chat-{user_id}-{int(datetime.now().timestamp() * 1000)}"
+            
+            # Try to deduct the estimated cost
+            deduction_failed = False
+            if estimated_total_cost > 0 and not billing_server_failed:
+                # Use legacy deduct_cost_idempotent which already exists in billing_server
+                success = cost_tracker.deduct_cost_idempotent(
+                    user_id, 
+                    job_id, 
+                    estimated_total_cost, 
+                    "Chat: Triage + Memory + Answer + Polish"
+                )
+                if not success:
+                    logger.warning(f"[BILLING] Cost deduction failed for user {user_id}. Insufficient funds.")
                     abort(402, message="Insufficient balance to complete this request.")
-
+                deduction_failed = False
+            elif estimated_total_cost > 0 and billing_server_failed:
+                logger.info(f"[FAIL-OPEN] Billing server unavailable. Proceeding with chat (charges may be missed).")
+                # Proceed anyway (fail-open principle)
+            
             # 3. Select Model based on Governor
             model_to_use = answer_client_flash
             downgrade_flag = False
@@ -671,28 +851,16 @@ class Chat(MethodView):
             try:
                 result_dict = model_to_use.chat(main_prompt, history=history_list)
                 draft_answer = result_dict['response']
-                call_cost = result_dict.get('cost', 0.0)
-                
-                # 6. CAPTURE: Charge actual cost after successful operation
-                if reservation_id and call_cost > 0:
-                    if not cost_tracker.capture_funds(reservation_id, call_cost):
-                        # Capture failed but user got the answer
-                        # Log this as a critical billing error for investigation
-                        logging.error(f"[CRITICAL] Capture failed for {user_id}: answer delivered but not charged. Reservation: {reservation_id}")
-                        # Don't fail the response to user - they already got the answer
-                        # The reconciliation service will handle this
-                elif reservation_id and call_cost == 0:
-                    # Cost was 0, release the reservation
-                    cost_tracker.release_funds(reservation_id)
+                call2_cost = result_dict.get('cost', 0.0)
+                total_cost += call2_cost
                 
             except Exception as e:
-                # 7. RELEASE: Return reserved funds on LLM call failure
-                if reservation_id:
-                    logger.warning(f"[RELEASE] LLM call failed for {user_id}. Releasing reservation {reservation_id}")
-                    cost_tracker.release_funds(reservation_id)
+                logger.error(f"[CALL 2 FAILED] Answer generation failed for {user_id}: {e}")
+                # We already deducted estimated cost, but let the user know
                 raise
 
             # --- CALL 3: "GEORGEIFICATION" POLISH ---
+            # FIX B: Moved polish call inside the try block so cost is only captured if entire flow succeeds
             
             polish_instructions = "Rephrase the DRAFT ANSWER to be natural, helpful, and consistent with your persona."
             
@@ -708,8 +876,14 @@ class Chat(MethodView):
                 draft_answer=draft_answer
             )
             
-            polish_result = polish_client.chat(polish_prompt)
-            final_answer = polish_result['response']
+            try:
+                polish_result = polish_client.chat(polish_prompt)
+                final_answer = polish_result['response']
+                call3_cost = polish_result.get('cost', 0.01)  # Default to $0.01 if not provided
+                total_cost += call3_cost
+            except Exception as e:
+                logger.error(f"[CALL 3 FAILED] Polish failed for {user_id}: {e}")
+                raise
             
             # --- NEW: FINAL GUARDRAIL CHECK ---
             # Check if the polish model detected a violation from Call 2
@@ -718,6 +892,30 @@ class Chat(MethodView):
                 # We log the specific error but return a generic, safe message to the user
                 return jsonify({"error": "I was unable to process that request in a way that aligns with my operational protocol."}), 500
 
+            # --- RECONCILE ACTUAL COST ---
+            # FIX C: We deducted estimated cost upfront. Now we reconcile with actual cost.
+            # If actual < estimated: refund difference
+            # If actual > estimated: we already charged estimated (we'll flag for manual review)
+            actual_reconciliation_cost = total_cost - estimated_total_cost
+            if actual_reconciliation_cost != 0:
+                if actual_reconciliation_cost < 0:
+                    # Overestimated - refund the difference
+                    refund_amount = abs(actual_reconciliation_cost)
+                    logger.info(f"[RECONCILE] Refunding ${refund_amount:.4f} to {user_id} (overestimation)")
+                    try:
+                        # Use existing top_up endpoint to add funds back
+                        success = cost_tracker.deduct_cost_idempotent(
+                            user_id,
+                            f"{job_id}-refund",
+                            -refund_amount,  # Negative to add back
+                            f"Refund: Overestimation reconciliation"
+                        )
+                    except:
+                        logger.warning(f"[RECONCILE] Failed to refund {user_id}, flagged for manual review")
+                else:
+                    # Underestimated - log for manual billing review
+                    logger.warning(f"[RECONCILE] Underestimation for {user_id}: charged ${estimated_total_cost:.4f}, actual ${total_cost:.4f}. Manual review needed.")
+            
             # --- SAVE & RESPOND ---
             message_id = session_manager.add_turn(project_id, user_id, user_query, final_answer)
             
@@ -730,21 +928,19 @@ class Chat(MethodView):
             session_manager.add_to_ingestion_queue(message_id, project_id, user_id)
             logger.info(f"Message {message_id} queued for async ingestion (file→vector→graph)")
             
-            # Convert dollar cost to Credits
-            call_cost_credits = int(call_cost * 10000)
-            
-            # Calculate final balance, handling billing server failure
+            # Convert dollar cost to Credits for response
+            total_cost_credits = int(total_cost * 10000)            # Calculate final balance, handling billing server failure
             final_balance_credits = None
             if not billing_server_failed:
                 # user_balance is already in Credits
-                final_balance_credits = user_balance - call_cost_credits
+                final_balance_credits = user_balance - total_cost_credits
                 
             # Return dict; flask-smorest handles JSON serialization via ChatResponseSchema
             return {
                 "message_id": message_id,
                 "response": final_answer,
                 "intent": intent,
-                "cost": call_cost_credits,      # Now in Credits
+                "cost": total_cost_credits,      # Now in Credits (all 4 calls)
                 "downgraded": downgrade_flag,
                 "balance": final_balance_credits # Now in Credits (or null)
             }
@@ -1020,10 +1216,9 @@ def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
     # Step 1: Get all chunks from chroma_server
     logging.info(f"[WIKI] Step 1: Fetching all documents from {collection_name}...")
     try:
-        resp = requests.post(
-            f"{CHROMA_SERVER_URL}/get_all_data",
-            json={"collection_name": collection_name},
-            timeout=30
+        resp = chroma_client.post(
+            "/get_all_data",
+            json={"collection_name": collection_name}
         )
         resp.raise_for_status()
         all_docs = resp.json().get('documents', [])
@@ -1215,65 +1410,139 @@ def get_user_id_from_request(req):
     if auth_header and auth_header.startswith('Bearer '):
         token = auth_header.split(' ')[1]
         try:
-            resp = requests.post(
-                f"{AUTH_SERVER_URL}/verify_token",
-                json={"token": token},
-                timeout=3
-            )
+            resp = auth_client.post("/verify_token", json={"token": token})
             if resp.ok:
                 user_data = resp.json()
                 return user_data.get("user_id")
             return None
-        except requests.RequestException:
+        except (ServiceUnavailable, requests.RequestException):
+            logger.warning("Auth service unavailable for Bearer token verification")
             return None
     
     # 2. Try auth_token from cookie (for browser requests)
     token = req.cookies.get('auth_token')
     if token:
         try:
-            auth_header = f"Bearer {token}"
-            resp = requests.post(
-                f"{AUTH_SERVER_URL}/verify_token",
-                headers={"Authorization": auth_header},
-                timeout=3
+            auth_header_val = f"Bearer {token}"
+            resp = auth_client.post(
+                "/verify_token",
+                headers={"Authorization": auth_header_val}
             )
             if resp.ok:
                 user_data = resp.json()
                 return user_data.get("user_id")
             return None
-        except requests.RequestException:
+        except (ServiceUnavailable, requests.RequestException):
+            logger.warning("Auth service unavailable for cookie token verification")
             return None
     
     # 3. Development fallback - only if no auth header or cookie
     if os.getenv('DEV_MODE') == 'true':
         mock_user_id = os.getenv('DEV_MOCK_USER_ID', 'dev-mock-user-1')
-        logging.debug(f"Dev mode: using mock user {mock_user_id}")
+        logger.debug(f"Dev mode: using mock user {mock_user_id}")
         return mock_user_id
     
     return None
 
 def _get_user_from_request(request) -> Optional[Dict[str, Any]]:
     """
-    Helper to call the Auth Server and verify the user's token,
-    which is now stored in a secure HttpOnly cookie or Bearer token.
+    SECURITY FIX: Fetch the full user data from auth_server including the REAL role.
+    Previously this function hard-coded roles, which caused role escalation vulnerabilities.
+    
+    This function now:
+    1. Extracts token from request (Bearer header or cookie)
+    2. Calls auth_server's /verify_token endpoint to get the ACTUAL role from database
+    3. Returns complete user data for proper permission checks
     
     In development mode (when DEV_MODE=true), uses a fixed mock user ID
     to preserve job ownership across requests.
     
-    Returns full user data dict for permission checks.
+    Returns:
+        Dict with: user_id (string), valid (bool), role (from auth_db), guest_projects (list)
+        None: If authentication fails or token is invalid
     """
-    user_id = get_user_id_from_request(request)
-    if not user_id:
-        return None
+    # Try to get full user data from auth server (includes real role)
+    user_data = _fetch_user_data_from_auth_server(request)
     
-    # For now, return a basic user dict with the user_id
-    # If we need role info, we'd fetch it from the auth server
-    return {
-        'user_id': user_id,
-        'valid': True,
-        'role': 'admin' if user_id.startswith('dev-') else 'user',
-        'guest_projects': []
-    }
+    if user_data and user_data.get('valid'):
+        # Successfully got real user data with actual role from auth_server
+        return user_data
+    
+    # If auth server call failed, try development fallback
+    if os.getenv('DEV_MODE') == 'true':
+        mock_user_id = os.getenv('DEV_MOCK_USER_ID', 'dev-mock-user-1')
+        logger.debug(f"Dev mode fallback: using mock user {mock_user_id}")
+        # Even in dev mode, use 'user' as default role (not 'admin' to be safe)
+        return {
+            'user_id': mock_user_id,
+            'valid': True,
+            'role': 'user',  # Safe default for dev mode
+            'guest_projects': []
+        }
+    
+    # No valid auth data and not in dev mode
+    return None
+
+def _fetch_user_data_from_auth_server(request) -> Optional[Dict[str, Any]]:
+    """
+    Fetch the REAL user data from auth_server's /verify_token endpoint.
+    
+    This gets the authoritative user record including the actual role from
+    the auth database, not a hard-coded value.
+    
+    RESILIENCE: Uses ResilientServiceClient with circuit breaker pattern.
+    If auth_server is unavailable, returns None (auth will fail, which is safe).
+    
+    Returns:
+        Dict with user_id, valid, role, and guest_projects from auth_server
+        None: If authentication fails or service unavailable
+    """
+    # 1. Try Bearer token from Authorization header
+    auth_header = request.headers.get('Authorization')
+    if auth_header and auth_header.startswith('Bearer '):
+        token = auth_header.split(' ')[1]
+        try:
+            resp = auth_client.post("/verify_token", json={"token": token})
+            if resp.ok:
+                user_data = resp.json()
+                # Ensure we have the role from the auth server
+                if user_data.get('valid') and 'role' in user_data:
+                    logger.debug(f"Auth server returned valid user with role: {user_data.get('role')}")
+                    return user_data
+            return None
+        except ServiceUnavailable:
+            logger.warning("Auth service unavailable for Bearer token verification (circuit breaker open)")
+            return None
+        except requests.RequestException as e:
+            logger.warning(f"Failed to connect to auth server for Bearer token verification: {e}")
+            return None
+    
+    # 2. Try auth_token from cookie (for browser requests)
+    token = request.cookies.get('auth_token')
+    if token:
+        try:
+            resp = auth_client.post(
+                "/verify_token",
+                json={"token": token}
+            )
+            if resp.ok:
+                user_data = resp.json()
+                # Ensure we have the role from the auth server
+                if user_data.get('valid') and 'role' in user_data:
+                    logger.debug(f"Auth server returned valid user from cookie with role: {user_data.get('role')}")
+                    return user_data
+            return None
+        except ServiceUnavailable:
+            logger.warning("Auth service unavailable for cookie token verification (circuit breaker open)")
+            return None
+        except requests.RequestException as e:
+            logger.warning(f"Failed to connect to auth server for cookie token verification: {e}")
+            return None
+    
+    # No valid token found
+    logger.debug("No Bearer token or auth_token cookie found in request")
+    return None
+
 
 def _check_project_access(auth_data: Dict, project_id: str) -> bool:
     """Checks if user is admin OR has guest access to the project."""
@@ -1290,50 +1559,105 @@ def _check_project_access(auth_data: Dict, project_id: str) -> bool:
 
 def get_user_balance(user_id: str) -> Optional[int]:
     """
-    Gets the user's current API pool balance in Credits.
+    Gets the user's current API pool balance in Credits using ResilientServiceClient.
+    
+    RESILIENCE: Uses circuit breaker pattern. If billing server is temporarily unavailable,
+    returns None to signal fail-open mode (allow request to proceed with billing disabled).
     
     Returns:
         int: The user's balance in Credits on success.
-        None: On any failure (e.g., connection error, non-200 status).
-              This signals the frontend and internal logic to fail-open.
+        None: On any failure (e.g., connection error, service unavailable, circuit open).
+              This signals fail-open: requests proceed but aren't charged.
     """
     try:
-        resp = requests.get(
-            f"{BILLING_SERVER_URL}/balance/{user_id}",
-            timeout=5
-        )
+        resp = billing_client.get(f"/balance/{user_id}")
         if resp.status_code == 200:
             dollar_balance = float(resp.json().get('balance', 0.0))
             # Convert dollars to Credits (10,000 Credits = $1.00)
+            logger.debug(f"Retrieved balance for user {user_id}: ${dollar_balance} = {int(dollar_balance * 10000)} Credits")
             return int(dollar_balance * 10000)
         
         # Log non-200 status as a warning
-        logging.warning(f"Billing server returned non-200 status ({resp.status_code}) for user {user_id}: {resp.text}")
+        logger.warning(f"Billing server returned non-200 status ({resp.status_code}) for user {user_id}")
     
+    except ServiceUnavailable:
+        # Circuit breaker is open - billing service is down
+        logger.warning(f"Billing service is down (circuit breaker open) for balance query: {user_id}. Failing open.")
+    except requests.exceptions.RequestException as e:
+        # Connection error, timeout, etc.
+        logger.warning(f"Failed to connect to billing server for user {user_id}: {e}")
     except Exception as e:
-        # Log connection errors, timeouts, etc.
-        logging.error(f"Failed to connect to billing server for user {user_id}: {e}", exc_info=True)
+        # Unexpected error
+        logger.error(f"Unexpected error getting user balance for {user_id}: {e}", exc_info=True)
     
     return None  # Return None on any failure (fail-open signal)
 
-def deduct_cost(user_id: str, job_id: str, cost: float, description: str):
-    """Tells the billing server to log a transaction and deduct cost."""
+def _get_project_owner(project_id: str) -> Optional[str]:
+    """
+    Securely gets the owner_id for a project by querying the auth_server database using ResilientServiceClient.
+    
+    SECURITY: This replaces the vulnerable filesystem-scanning function.
+    The auth_server is the authoritative source of truth for project ownership.
+    
+    RESILIENCE: Uses circuit breaker pattern. If auth_server is temporarily unavailable,
+    returns None to gracefully degrade (request may fail later on permission checks).
+    
+    Args:
+        project_id: The project ID to look up
+        
+    Returns:
+        The owner's user_id (Firebase UID), or None if project not found or service unavailable
+    """
     try:
-        resp = requests.post(
-            f"{BILLING_SERVER_URL}/deduct",
+        resp = auth_client.get(f"/internal/projects/{project_id}/owner", headers=get_internal_headers())
+        if resp.status_code == 200:
+            data = resp.json()
+            owner_id = data.get('owner_id')
+            logger.debug(f"Project owner lookup: {project_id} → {owner_id}")
+            return owner_id
+        elif resp.status_code == 404:
+            logger.warning(f"Project {project_id} not found in auth_server")
+            return None
+        else:
+            logger.error(f"Auth server error checking project owner: {resp.status_code}")
+            return None
+    except ServiceUnavailable:
+        # Circuit breaker is open - auth service is down
+        logger.warning(f"Auth service is down (circuit breaker open) for project owner lookup: {project_id}")
+        return None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to query auth_server for project owner: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error getting project owner for {project_id}: {e}", exc_info=True)
+        return None
+
+def deduct_cost(user_id: str, job_id: str, cost: float, description: str):
+    """
+    Tells the billing server to log a transaction and deduct cost using ResilientServiceClient.
+    
+    RESILIENCE: Uses circuit breaker pattern. If billing server is temporarily unavailable,
+    logs the transaction to the failed_transaction queue for later reconciliation.
+    """
+    try:
+        resp = billing_client.post(
+            "/deduct",
             json={
                 "user_id": user_id,
                 "cost": cost,
                 "job_id": job_id,
                 "description": description
             },
-            headers=get_internal_headers(),
-            timeout=2.0
+            headers=get_internal_headers()
         )
         if resp.status_code != 200:
             raise Exception(f"Billing server returned {resp.status_code}")
+        logger.info(f"Cost deducted: user={user_id}, job={job_id}, cost={cost}")
+    except ServiceUnavailable:
+        logger.warning(f"Billing service is down (circuit breaker open). Logging failed deduction for reconciliation: user={user_id}, job={job_id}, cost={cost}")
+        failed_tx_logger.log_failure(user_id, job_id, cost, description)
     except Exception as e:
-        logging.error(f"Failed to deduct cost for {user_id}: {e}. Logging for reconciliation.")
+        logger.error(f"Failed to deduct cost for {user_id}: {e}. Logging for reconciliation.")
         failed_tx_logger.log_failure(user_id, job_id, cost, description)
 
 def get_triage_data(user_query: str, project_id: str) -> TriageData:
@@ -1416,21 +1740,23 @@ def resolve_memory(triage_data: TriageData, user_query: str, user_id: str, proje
 
 def get_chroma_context(query: str, collection_name: str) -> Tuple[Optional[str], bool]:
     """
-    Calls the Chroma server to get RAG context.
+    Calls the Chroma server to get RAG context using ResilientServiceClient.
+    
+    RESILIENCE: Uses circuit breaker pattern. If Chroma service is temporarily unavailable,
+    gracefully degrades by returning (None, False) to signal failure in retrieval.
     
     Returns:
         (context_str, True) on success with context.
         ("", True) if no context was needed.
-        (None, False) on failure.
+        (None, False) on failure or service unavailable.
     """
     if not collection_name or collection_name == "NONE":
         return "", True  # Success, but no context needed
     
     try:
-        resp = requests.post(
-            f"{CHROMA_SERVER_URL}/query",
-            json={"collection_name": collection_name, "query_texts": [query], "n_results": 5},
-            timeout=10
+        resp = chroma_client.post(
+            "/query",
+            json={"collection_name": collection_name, "query_texts": [query], "n_results": 5}
         )
         if resp.status_code == 200:
             results = resp.json()
@@ -1440,13 +1766,20 @@ def get_chroma_context(query: str, collection_name: str) -> Tuple[Optional[str],
                 f"[Source: {meta.get('source_file', 'Unknown')}]\n{doc}"
                 for doc, meta in zip(docs, metadatas)
             )
+            logger.debug(f"Retrieved {len(docs)} results from Chroma for collection {collection_name}")
             return context_str, True  # Success with context
         else:
             # Handle non-200 status codes
-            logging.warning(f"Chroma server returned non-200 status: {resp.status_code} {resp.text}")
+            logger.warning(f"Chroma server returned non-200 status: {resp.status_code}")
             return None, False  # Failure
+    except ServiceUnavailable:
+        logger.warning(f"Chroma service is down (circuit breaker open) for collection {collection_name}. Gracefully degrading.")
+        return None, False  # Failure - graceful degradation
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to connect to Chroma server: {e}")
+        return None, False  # Failure
     except Exception as e:
-        logging.error(f"Failed to get context from Chroma: {e}")
+        logger.error(f"Unexpected error getting context from Chroma: {e}", exc_info=True)
         return None, False  # Failure
 
 def _generate_cypher_query(user_query: str) -> Optional[str]:

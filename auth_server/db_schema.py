@@ -43,14 +43,27 @@ def init_database(db_path: str = "users.db"):
         """)
         
         # Create users table
+        # IMPORTANT: No CHECK constraint on role to allow flexible role types
+        # (admin, guest, author, beta_tester, etc.) without database migrations
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id TEXT PRIMARY KEY,
                 email TEXT UNIQUE NOT NULL,
-                role TEXT NOT NULL CHECK(role IN ('admin', 'guest')),
+                role TEXT NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 last_login DATETIME
+            )
+        """)
+        
+        # Create projects table - single source of truth for project ownership
+        # Eliminates "filesystem as database" anti-pattern and timing attack vectors
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(owner_id) REFERENCES users(user_id)
             )
         """)
         
@@ -72,6 +85,7 @@ def init_database(db_path: str = "users.db"):
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_invites_type ON invites(type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_permissions_project ON project_permissions(project_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_permissions_user ON project_permissions(user_id)")
         

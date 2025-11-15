@@ -4,12 +4,19 @@ import requests
 import base64
 import json
 import time
+import sys
+from pathlib import Path
 from functools import wraps
 from collections import defaultdict
 from flask import Flask, request, jsonify
 import firebase_admin
 from firebase_admin import credentials, auth
+
+# Add backend to path to import service_utils
+sys.path.insert(0, str(Path(__file__).parent.parent / 'backend'))
+
 from auth_manager import AuthManager
+from service_utils import require_internal_token
 
 # Initialize Flask
 app = Flask(__name__)
@@ -420,6 +427,112 @@ def grant_access(user_id):
     except Exception as e:
         logger.error(f"grant_access error: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
+
+@app.route('/internal/projects', methods=['POST'])
+@require_internal_token
+def internal_create_project():
+    """
+    INTERNAL-ONLY endpoint: Create a new project record with owner tracking.
+    
+    SECURITY: This endpoint is protected by @require_internal_token and should only
+    be called by the backend service after creating project directories.
+    
+    This registers the project in the authoritative database, replacing filesystem
+    enumeration which was vulnerable to timing attacks.
+    
+    Args (JSON body):
+        project_id: The project ID to register
+        owner_id: The Firebase UID of the project owner
+        
+    Returns:
+        201 Created: Project successfully registered
+        400 Bad Request: Missing required fields
+        409 Conflict: Project already exists
+        500 Server Error: Database error
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Request body is required"}), 400
+        
+        project_id = data.get('project_id')
+        owner_id = data.get('owner_id')
+        
+        if not project_id or not owner_id:
+            return jsonify({"error": "project_id and owner_id are required"}), 400
+        
+        # Try to register the project
+        success = auth_manager.register_project(project_id, owner_id)
+        
+        if success:
+            logger.info(f"[INTERNAL] Project created: {project_id} by {owner_id}")
+            return jsonify({"message": "Project created successfully", "project_id": project_id}), 201
+        else:
+            # Could be already exists or database error
+            # Assume already exists for now (register_project logs the reason)
+            return jsonify({"error": "Project already exists"}), 409
+            
+    except Exception as e:
+        logger.error(f"Error in /internal/projects: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
+
+@app.route('/internal/projects/<project_id>/owner', methods=['GET'])
+@require_internal_token
+def internal_get_project_owner(project_id):
+    """
+    INTERNAL-ONLY endpoint: Get the owner of a project from the database.
+    
+    SECURITY: This endpoint is protected by @require_internal_token and should only
+    be called by other internal services (filesystem_server, backend, etc.).
+    
+    Unlike filesystem scanning (timing attack vulnerable), this queries the authoritative
+    database to determine project ownership.
+    
+    Args:
+        project_id: The project ID to look up
+        
+    Returns:
+        JSON with 'project_id' and 'owner_id' fields
+        404 if project not found
+        
+    CRITICAL: The caller (filesystem_server) must NOT trust X-User-ID in their own requests.
+    This endpoint provides the actual owner - the caller should compare it with any
+    user_id they received in headers.
+    """
+    try:
+        owner_id = auth_manager.get_project_owner(project_id)
+        
+        if owner_id is None:
+            logger.warning(f"[INTERNAL] Project {project_id} not found")
+            return jsonify({'error': 'Project not found'}), 404
+        
+        logger.info(f"[INTERNAL] Project owner lookup: {project_id} → {owner_id}")
+        return jsonify({'project_id': project_id, 'owner_id': owner_id}), 200
+        
+    except Exception as e:
+        logger.error(f"Error in /internal/projects/{project_id}/owner: {e}", exc_info=True)
+        return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/internal/project_owner/<project_id>', methods=['GET'])
+@require_internal_token
+def get_project_owner_internal(project_id):
+    """
+    DEPRECATED: Use /internal/projects/<project_id>/owner instead.
+    Kept for backward compatibility during migration.
+    """
+    try:
+        owner_id = auth_manager.get_project_owner(project_id)
+        
+        if owner_id is None:
+            logger.warning(f"[INTERNAL] Project {project_id} not found")
+            return jsonify({'error': 'Project not found'}), 404
+        
+        logger.info(f"[INTERNAL] Project owner lookup (DEPRECATED): {project_id} → {owner_id}")
+        return jsonify({'project_id': project_id, 'owner': owner_id}), 200
+        
+    except Exception as e:
+        logger.error(f"Error in /internal/project_owner/{project_id}: {e}", exc_info=True)
+        return jsonify({'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':
     import os

@@ -122,7 +122,8 @@ def validate_token_and_extract_user_id():
 ALLOWED_EXTENSIONS = {'txt', 'md', 'docx', 'pdf', 'odt'}
 
 # Internal service URLs (6000-series ports are reserved for internal services)
-CHROMA_SERVER_URL = os.getenv("CHROMA_SERVER_URL", "http://localhost:6003") 
+CHROMA_SERVER_URL = os.getenv("CHROMA_SERVER_URL", "http://localhost:6003")
+AUTH_SERVER_URL = os.getenv("AUTH_SERVER_URL", "http://localhost:6001") 
 
 # Ensure directories exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -614,51 +615,10 @@ def save_file():
 
 # --- Internal Endpoints ---
 
-@app.route('/internal/project_owner/<project_id>', methods=['GET'])
-@require_internal_token
-def get_project_owner(project_id):
-    """
-    INTERNAL-ONLY endpoint: Get the actual owner of a project.
-    
-    SECURITY: This endpoint must be called by internal services ONLY
-    (protected by @require_internal_token). It does NOT trust X-User-ID header
-    and instead scans the filesystem to find the actual owner.
-    
-    The project structure is: PROJECTS_FOLDER / owner_user_id / project_id
-    
-    We scan all user directories to find which one contains this project_id.
-    
-    Args:
-        project_id: The project ID to check
-        
-    Returns:
-        JSON with 'owner' field (the actual user_id), or 404 if not found
-        
-    Curl example:
-        curl http://localhost:6005/internal/project_owner/abc123 \
-             -H "X-INTERNAL-TOKEN: secret123"
-    """
-    try:
-        # Scan the projects folder to find actual owner
-        projects_folder = app.config['PROJECTS_FOLDER']
-        
-        # Iterate through all user directories
-        if os.path.isdir(projects_folder):
-            for user_id in os.listdir(projects_folder):
-                user_project_path = os.path.join(projects_folder, user_id, project_id)
-                
-                # Check if this user owns this project
-                if os.path.isdir(user_project_path):
-                    logger.info(f"Found project owner: {user_id} owns {project_id}")
-                    return jsonify({'project_id': project_id, 'owner': user_id}), 200
-        
-        # Project not found
-        logger.warning(f"Project not found: {project_id}")
-        return jsonify({'error': 'Project not found'}), 404
-        
-    except Exception as e:
-        logger.error(f"Error in /internal/project_owner/{project_id}: {e}", exc_info=True)
-        return jsonify({'error': 'Failed to check project owner'}), 500
+# NOTE: Project ownership is now queried from auth_server database instead of scanning filesystem.
+# This eliminates the timing attack vulnerability where a compromised service could enumerate
+# all user IDs by checking which directories exist. The auth_server is now the single source
+# of truth for who owns what.
 
 # --- Standard File Serving Endpoints ---
 
