@@ -577,6 +577,54 @@ def save_file():
         app.logger.error(f"[{g.user_id}:{project_id}] Failed to save file: {e}", exc_info=True)
         return jsonify({'error': 'Failed to save file'}), 500
 
+# --- Internal Endpoints ---
+
+@app.route('/internal/project_owner/<project_id>', methods=['GET'])
+@require_internal_token
+def get_project_owner(project_id):
+    """
+    INTERNAL-ONLY endpoint: Get the actual owner of a project.
+    
+    SECURITY: This endpoint must be called by internal services ONLY
+    (protected by @require_internal_token). It does NOT trust X-User-ID header
+    and instead scans the filesystem to find the actual owner.
+    
+    The project structure is: PROJECTS_FOLDER / owner_user_id / project_id
+    
+    We scan all user directories to find which one contains this project_id.
+    
+    Args:
+        project_id: The project ID to check
+        
+    Returns:
+        JSON with 'owner' field (the actual user_id), or 404 if not found
+        
+    Curl example:
+        curl http://localhost:6005/internal/project_owner/abc123 \
+             -H "X-INTERNAL-TOKEN: secret123"
+    """
+    try:
+        # Scan the projects folder to find actual owner
+        projects_folder = app.config['PROJECTS_FOLDER']
+        
+        # Iterate through all user directories
+        if os.path.isdir(projects_folder):
+            for user_id in os.listdir(projects_folder):
+                user_project_path = os.path.join(projects_folder, user_id, project_id)
+                
+                # Check if this user owns this project
+                if os.path.isdir(user_project_path):
+                    logger.info(f"Found project owner: {user_id} owns {project_id}")
+                    return jsonify({'project_id': project_id, 'owner': user_id}), 200
+        
+        # Project not found
+        logger.warning(f"Project not found: {project_id}")
+        return jsonify({'error': 'Project not found'}), 404
+        
+    except Exception as e:
+        logger.error(f"Error in /internal/project_owner/{project_id}: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to check project owner'}), 500
+
 # --- Standard File Serving Endpoints ---
 
 @app.route('/project/<project_id>/files', methods=['GET'])

@@ -432,38 +432,68 @@ class AuthManager:
         """
         Check if a user owns a project.
         
+        SECURITY: This performs a REAL ownership check, not a confused-deputy check.
+        
         A user owns a project if they are the creator (the project directory
         exists under their user_id in the filesystem_server).
         
-        This is determined by calling the filesystem_server to check if the
-        project path PROJECTS_FOLDER/{user_id}/{project_id} exists.
+        The check works as follows:
+        1. Call filesystem_server's INTERNAL-ONLY endpoint /internal/project_owner/<project_id>
+        2. This endpoint scans the filesystem to find the actual owner (does NOT trust X-User-ID)
+        3. Compare returned owner with the user_id parameter
+        4. Return True only if they match exactly
+        
+        This prevents confused-deputy attacks where:
+        - Malicious user could set X-User-ID to another user's ID
+        - Or trick an endpoint into returning 200 under false premises
         
         Args:
             user_id: The user's Firebase UID
             project_id: The project ID to check ownership of
             
         Returns:
-            True if user owns the project, False otherwise
+            True if user is the actual owner of the project, False otherwise
         """
         try:
             # Get the filesystem server URL from environment
             filesystem_server_url = os.getenv("FILESYSTEM_SERVER_URL", "http://localhost:6005")
+            internal_token = os.getenv("INTERNAL_SERVICE_TOKEN", "")
             
-            # Call filesystem_server to check if project exists for this user
+            if not internal_token:
+                logger.warning(f"Cannot check project ownership: INTERNAL_SERVICE_TOKEN not configured")
+                return False
+            
+            # Call the INTERNAL-ONLY endpoint to get the actual owner
+            # This endpoint scans the filesystem and does NOT trust user-sent headers
             resp = requests.get(
-                f"{filesystem_server_url}/project/{project_id}/files",
-                headers={"X-User-ID": user_id, "X-INTERNAL-TOKEN": os.getenv("INTERNAL_SERVICE_TOKEN", "")},
+                f"{filesystem_server_url}/internal/project_owner/{project_id}",
+                headers={"X-INTERNAL-TOKEN": internal_token},
                 timeout=3
             )
             
-            # If filesystem_server returns 200 OK, the project exists for this user
-            if resp.status_code == 200:
+            if resp.status_code != 200:
+                logger.warning(f"Project {project_id} not found or error: {resp.status_code}")
+                return False
+            
+            data = resp.json()
+            actual_owner = data.get('owner')
+            
+            # CRITICAL: Compare the actual owner with the requesting user
+            # Only return True if they match exactly
+            if actual_owner == user_id:
                 logger.debug(f"User {user_id} verified as owner of project {project_id}")
                 return True
-            
-            logger.warning(f"User {user_id} does not own project {project_id}")
+            else:
+                logger.warning(f"Ownership mismatch: {user_id} claims to own {project_id}, but actual owner is {actual_owner}")
+                return False
+                
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout checking project ownership for {user_id}/{project_id}")
+            return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request failed checking project ownership for {user_id}/{project_id}: {e}")
             return False
         except Exception as e:
-            logger.error(f"Error checking project ownership for {user_id}/{project_id}: {e}")
+            logger.error(f"Error checking project ownership for {user_id}/{project_id}: {e}", exc_info=True)
             # Fail secure - if we can't verify ownership, deny access
             return False
