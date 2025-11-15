@@ -329,6 +329,12 @@ class AuthManager:
         """
         Grant a user access to a project (guest pass).
         
+        SECURITY: This is a SAFE INSERT operation. It will NOT overwrite existing permissions.
+        If the user already has access to this project, this call is a no-op (returns False).
+        
+        For intentional permission changes (including downgrades), use update_project_access()
+        instead. Permission downgrades must be explicit and logged.
+        
         SECURITY: Verifies that user_id is a fully registered user in the database
         before granting permissions. Prevents granting access to unregistered or
         deleted users.
@@ -340,7 +346,7 @@ class AuthManager:
             granted_by: User ID of the person granting access
             
         Returns:
-            True if successful, False if user not registered or error occurs
+            True if permission was newly granted, False if user already had access or error occurs
         """
         try:
             with self._get_conn() as conn:
@@ -354,18 +360,84 @@ class AuthManager:
                     logger.warning(f"Cannot grant access: user {user_id} not registered in database")
                     return False
                 
-                # User exists, safe to grant access
-                conn.execute(
-                    """INSERT OR REPLACE INTO project_permissions 
+                # User exists, attempt to grant access
+                # Use INSERT ... ON CONFLICT DO NOTHING to prevent silent overwrites
+                cursor = conn.execute(
+                    """INSERT INTO project_permissions 
                        (project_id, user_id, permission_level, granted_by)
-                       VALUES (?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(project_id, user_id) DO NOTHING""",
                     (project_id, user_id, permission_level, granted_by)
                 )
                 conn.commit()
-            logger.info(f"User {user_id} granted {permission_level} access to project {project_id}")
-            return True
+                
+                # Check if we actually inserted a new row
+                if cursor.rowcount > 0:
+                    logger.info(f"User {user_id} granted {permission_level} access to project {project_id}")
+                    return True
+                else:
+                    logger.info(f"User {user_id} already has access to project {project_id}, no change made")
+                    return False
+                    
         except sqlite3.Error as e:
             logger.error(f"Error granting project access: {e}", exc_info=True)
+            return False
+
+    def update_project_access(self, project_id: str, user_id: str, 
+                             permission_level: str, granted_by: str = None) -> bool:
+        """
+        Update an existing user's access level to a project.
+        
+        SECURITY: This is an EXPLICIT permission change operation. Use this only when you
+        intentionally want to change a user's permissions (including downgrades).
+        
+        Permission changes are always logged with the new level for audit trail purposes.
+        
+        Args:
+            project_id: The project ID
+            user_id: The user's Firebase UID (user must already have some access)
+            permission_level: New permission level: 'read', 'comment', 'edit', 'admin'
+            granted_by: User ID of the person making the change (for audit trail)
+            
+        Returns:
+            True if permission was updated, False if user had no access or error occurs
+        """
+        try:
+            with self._get_conn() as conn:
+                # Verify user has existing access
+                existing = conn.execute(
+                    "SELECT permission_level FROM project_permissions WHERE project_id = ? AND user_id = ?",
+                    (project_id, user_id)
+                ).fetchone()
+                
+                if not existing:
+                    logger.warning(f"Cannot update access: user {user_id} has no existing access to project {project_id}")
+                    return False
+                
+                old_level = existing['permission_level']
+                
+                # Update the permission level
+                cursor = conn.execute(
+                    """UPDATE project_permissions 
+                       SET permission_level = ?, granted_by = ?, granted_at = CURRENT_TIMESTAMP
+                       WHERE project_id = ? AND user_id = ?""",
+                    (permission_level, granted_by, project_id, user_id)
+                )
+                conn.commit()
+                
+                if cursor.rowcount > 0:
+                    # Log the change with both old and new levels for audit trail
+                    if permission_level != old_level:
+                        logger.warning(f"User {user_id} permission changed for project {project_id}: {old_level} → {permission_level} (by {granted_by})")
+                    else:
+                        logger.info(f"User {user_id} permission confirmed for project {project_id}: {permission_level}")
+                    return True
+                else:
+                    logger.error(f"Failed to update permission for user {user_id} on project {project_id}")
+                    return False
+                    
+        except sqlite3.Error as e:
+            logger.error(f"Error updating project access: {e}", exc_info=True)
             return False
 
     def check_project_access(self, user_id: str, project_id: str) -> dict:
