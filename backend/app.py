@@ -1545,17 +1545,95 @@ def _fetch_user_data_from_auth_server(request) -> Optional[Dict[str, Any]]:
 
 
 def _check_project_access(auth_data: Dict, project_id: str) -> bool:
-    """Checks if user is admin OR has guest access to the project."""
+    """
+    Check if user has access to a project (owner OR guest).
+    
+    SECURITY FIX: This now queries auth_server to verify actual project ownership.
+    Previously, ANY admin could access ANY project (broken authorization).
+    
+    Now:
+    - Admins can only access their OWN projects (where they are the owner)
+    - Guests can access projects they've been explicitly granted permission to
+    - Role alone is NOT sufficient for authorization
+    
+    This prevents the authorization flaw where admin A could access admin B's data.
+    
+    Args:
+        auth_data: Dictionary containing 'user_id' and 'role'
+        project_id: The project ID to check access for
+        
+    Returns:
+        True if user has access (owner or guest), False otherwise
+    """
     if not auth_data:
+        logger.warning("_check_project_access: No auth_data provided")
         return False
-    # Admins own their projects. We assume they own the project they are querying.
-    # A more robust check would involve a project_owner_id check here.
-    if auth_data.get('role') == 'admin':
-        return True
-    # Guests must have an explicit entry in their guest_projects list
-    if auth_data.get('role') == 'guest' and project_id in auth_data.get('guest_projects', []):
-        return True
-    return False
+    
+    user_id = auth_data.get('user_id')
+    if not user_id:
+        logger.warning("_check_project_access: No user_id in auth_data")
+        return False
+    
+    try:
+        # Query auth_server to check if user has access to this project
+        # This checks BOTH ownership (admin owns project) AND guest access
+        resp = auth_client.post(
+            f"/internal/projects/{project_id}/check_access",
+            json={'user_id': user_id},
+            headers=get_internal_headers()
+        )
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            has_access = data.get('has_access', False)
+            access_type = data.get('access_type')
+            
+            if has_access:
+                logger.debug(
+                    f"User {user_id} has {access_type} access to project {project_id}"
+                )
+                return True
+            else:
+                logger.warning(
+                    f"User {user_id} (role={auth_data.get('role')}) denied access to project {project_id}"
+                )
+                return False
+        
+        elif resp.status_code == 404:
+            logger.warning(f"Project {project_id} not found in auth_server")
+            return False
+        
+        else:
+            logger.error(
+                f"Auth server error checking project access: {resp.status_code} - {resp.text}"
+            )
+            # SECURITY: Fail closed - deny access on error
+            return False
+    
+    except ServiceUnavailable:
+        # Circuit breaker is open - auth service is down
+        logger.error(
+            f"Auth service is down (circuit breaker open) for access check: "
+            f"user={user_id}, project={project_id}. Failing CLOSED (deny access)."
+        )
+        # SECURITY: Fail closed - deny access if auth_server is unavailable
+        # This is the safest approach: better to deny legitimate requests temporarily
+        # than to allow unauthorized access
+        return False
+    
+    except requests.exceptions.RequestException as e:
+        logger.error(
+            f"Failed to query auth_server for project access check: {e}. Failing CLOSED."
+        )
+        # SECURITY: Fail closed - deny access on connection error
+        return False
+    
+    except Exception as e:
+        logger.error(
+            f"Unexpected error in _check_project_access: {e}", exc_info=True
+        )
+        # SECURITY: Fail closed - deny access on unexpected error
+        return False
 
 def get_user_balance(user_id: str) -> Optional[int]:
     """

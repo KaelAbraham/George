@@ -570,6 +570,81 @@ def get_project_owner_internal(project_id):
         logger.error(f"Error in /internal/project_owner/{project_id}: {e}", exc_info=True)
         return jsonify({'error': 'Internal server error'}), 500
 
+@app.route('/internal/projects/<project_id>/check_access', methods=['POST'])
+@require_internal_token
+def check_user_project_access(project_id):
+    """
+    INTERNAL-ONLY endpoint: Check if a user has access to a project.
+    
+    SECURITY: This endpoint is protected by @require_internal_token and should only
+    be called by other internal services (backend, etc.).
+    
+    This checks BOTH:
+    1. Project ownership (user is the admin/owner who created the project)
+    2. Guest access (user has been granted explicit permission)
+    
+    This prevents the authorization flaw where any admin could access any project.
+    Now admins can only access their OWN projects (or projects they've been granted access to).
+    
+    Args (JSON body):
+        user_id: The Firebase UID of the user requesting access
+        
+    Returns:
+        JSON with:
+        - has_access (bool): True if user is owner OR has guest permission
+        - access_type (str): 'owner' or 'guest' or None
+        - permission_level (str): For guests, the permission level ('read', 'edit', etc.)
+        404 if project not found
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Request body required'}), 400
+        
+        user_id = data.get('user_id')
+        if not user_id:
+            return jsonify({'error': 'user_id is required'}), 400
+        
+        # Check 1: Is user the owner?
+        owner_id = auth_manager.get_project_owner(project_id)
+        
+        if owner_id is None:
+            logger.warning(f"[INTERNAL] Project {project_id} not found")
+            return jsonify({'error': 'Project not found'}), 404
+        
+        if owner_id == user_id:
+            # User is the owner
+            logger.info(f"[INTERNAL] User {user_id} is owner of project {project_id}")
+            return jsonify({
+                'has_access': True,
+                'access_type': 'owner',
+                'permission_level': 'admin'
+            }), 200
+        
+        # Check 2: Does user have guest access?
+        access_info = auth_manager.check_project_access(user_id, project_id)
+        
+        if access_info.get('has_access'):
+            # User has guest access
+            logger.info(f"[INTERNAL] User {user_id} has guest access to project {project_id}")
+            return jsonify({
+                'has_access': True,
+                'access_type': 'guest',
+                'permission_level': access_info.get('permission_level', 'read')
+            }), 200
+        
+        # User has no access
+        logger.info(f"[INTERNAL] User {user_id} has no access to project {project_id}")
+        return jsonify({
+            'has_access': False,
+            'access_type': None,
+            'permission_level': None
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in /internal/projects/{project_id}/check_access: {e}", exc_info=True)
+        return jsonify({'error': 'Internal server error'}), 500
+
 @app.route('/admin/retry_pending_billing', methods=['POST'])
 @require_internal_token
 def retry_pending_billing():
