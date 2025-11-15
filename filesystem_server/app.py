@@ -628,8 +628,22 @@ def get_project_owner(project_id):
 # --- Standard File Serving Endpoints ---
 
 @app.route('/project/<project_id>/files', methods=['GET'])
+@require_internal_token
 def list_files(project_id):
-    """List all files in a project. Uses X-User-ID header for user-isolated storage."""
+    """
+    List all files in a project.
+    
+    SECURITY: Requires X-INTERNAL-TOKEN for backend service authentication.
+    Frontend must NOT call this directly. Only backend (which verifies Firebase tokens)
+    should request file lists and pass them to clients.
+    
+    This enforces proper microservice trust boundaries:
+    - Frontend has Firebase token (unverified by filesystem)
+    - Backend verifies Firebase token and calls this endpoint with X-INTERNAL-TOKEN
+    - Filesystem trusts backend to provide correct X-User-ID
+    
+    Uses X-User-ID header for user-isolated storage (verified by before_request).
+    """
     project_path = get_project_path(project_id)
     if not os.path.isdir(project_path):
         return jsonify({'error': 'Project not found'}), 404
@@ -638,8 +652,22 @@ def list_files(project_id):
     return jsonify({'project_id': project_id, 'files': files})
 
 @app.route('/file/<project_id>/<filename>', methods=['GET'])
+@require_internal_token
 def get_file_content(project_id, filename):
-    """Get file content from a project. Uses X-User-ID header for user-isolated storage."""
+    """
+    Get file content from a project.
+    
+    SECURITY: Requires X-INTERNAL-TOKEN for backend service authentication.
+    Frontend must NOT call this directly. Only backend (which verifies Firebase tokens)
+    should request file content and pass it to clients.
+    
+    This enforces proper microservice trust boundaries:
+    - Frontend has Firebase token (unverified by filesystem)
+    - Backend verifies Firebase token and calls this endpoint with X-INTERNAL-TOKEN
+    - Filesystem trusts backend to provide correct X-User-ID
+    
+    Uses X-User-ID header for user-isolated storage (verified by before_request).
+    """
     project_path = get_project_path(project_id)
     file_path = os.path.join(project_path, filename)
     
