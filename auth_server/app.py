@@ -139,7 +139,7 @@ def validate_invite():
     try:
         # Call Billing Server to get active subscription count
         headers = get_internal_headers()
-        resp = requests.get(f"{BILLING_SERVER_URL}/stats/subscription_count", headers=headers)
+        resp = requests.get(f"{BILLING_SERVER_URL}/stats/subscription_count", headers=headers, timeout=3)
         if resp.status_code == 200:
             count = resp.json().get('count', 0)
             if count >= USER_CAP:
