@@ -27,7 +27,12 @@ UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'upload
 PROJECTS_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'projects')
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['PROJECTS_FOLDER'] = PROJECTS_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB (increased for large PDFs)
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max upload size
+app.config['MAX_CONTENT_LENGTH_JSON'] = 10 * 1024 * 1024  # 10MB for JSON payloads
+
+# Upload size limits for different operations
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB for file uploads
+MAX_CONTENT_SIZE = 5 * 1024 * 1024  # 5MB for save_file endpoint content
 
 # --- DECORATOR: Require Internal Service Token ---
 def require_internal_token(f):
@@ -84,6 +89,34 @@ def get_project_path(project_id):
     Structure: PROJECTS_FOLDER / user_id / project_id
     """
     return os.path.join(app.config['PROJECTS_FOLDER'], g.user_id, project_id)
+
+def validate_project_path(full_path, project_id):
+    """
+    Validate that the resolved path stays within the project directory.
+    Prevents path traversal attacks (e.g., ../../../etc/passwd).
+    Returns True if safe, False otherwise.
+    """
+    project_path = get_project_path(project_id)
+    # Resolve symlinks and normalize paths
+    real_full_path = os.path.realpath(os.path.abspath(full_path))
+    real_project_path = os.path.realpath(os.path.abspath(project_path))
+    # Ensure the file is within the project directory
+    return real_full_path.startswith(real_project_path + os.sep) or real_full_path == real_project_path
+
+def validate_stream_size(stream, max_size=None):
+    """
+    Validate the size of an uploaded file stream before reading.
+    Returns file size in bytes if valid, raises ValueError if too large.
+    """
+    if max_size is None:
+        max_size = MAX_FILE_SIZE
+    
+    # Check Content-Length header if available
+    content_length = request.content_length
+    if content_length and content_length > max_size:
+        raise ValueError(f"File size ({content_length} bytes) exceeds maximum allowed ({max_size} bytes)")
+    
+    return True
 
 def allowed_file(filename):
     return '.' in filename and \
@@ -144,6 +177,12 @@ def upload_file_with_conversion(project_id):
         return jsonify({"error": f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"}), 400
     
     try:
+        # Validate stream size before processing
+        try:
+            validate_stream_size(file.stream, MAX_FILE_SIZE)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 413  # 413 Payload Too Large
+        
         # Create project directory using user-isolated path
         project_path = get_project_path(project_id)
         os.makedirs(project_path, exist_ok=True)
@@ -152,9 +191,21 @@ def upload_file_with_conversion(project_id):
         filename = secure_filename(file.filename)
         file_path = os.path.join(project_path, filename)
         
+        # Validate path to prevent traversal attacks
+        if not validate_project_path(file_path, project_id):
+            logger.warning(f"[{g.user_id}:{project_id}] Path traversal attempt detected: {file_path}")
+            return jsonify({"error": "Invalid file path"}), 400
+        
         # Save the original file
         logger.info(f"[{g.user_id}:{project_id}] Saving file: {filename}")
         file.save(file_path)
+        
+        # Verify the file size after saving
+        file_size = os.path.getsize(file_path)
+        if file_size > MAX_FILE_SIZE:
+            os.remove(file_path)
+            logger.warning(f"[{g.user_id}:{project_id}] File size {file_size} exceeds limit, removed")
+            return jsonify({"error": f"File size exceeds maximum allowed ({MAX_FILE_SIZE} bytes)"}), 413
         
         result = {
             'project_id': project_id,
@@ -215,11 +266,30 @@ def upload_file(project_id):
         return jsonify({"error": "Project ID is required"}), 400
 
     if file and allowed_file(file.filename):
+        # Validate stream size before processing
+        try:
+            validate_stream_size(file.stream, MAX_FILE_SIZE)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 413  # 413 Payload Too Large
+        
         project_path = get_project_path(project_id)
         os.makedirs(project_path, exist_ok=True)
         
         upload_path = os.path.join(project_path, filename)
+        
+        # Validate path to prevent traversal attacks
+        if not validate_project_path(upload_path, project_id):
+            logger.warning(f"[{g.user_id}:{project_id}] Path traversal attempt detected: {upload_path}")
+            return jsonify({"error": "Invalid file path"}), 400
+        
         file.save(upload_path)
+        
+        # Verify the file size after saving
+        file_size = os.path.getsize(upload_path)
+        if file_size > MAX_FILE_SIZE:
+            os.remove(upload_path)
+            logger.warning(f"[{g.user_id}:{project_id}] File size {file_size} exceeds limit, removed")
+            return jsonify({"error": f"File size exceeds maximum allowed ({MAX_FILE_SIZE} bytes)"}), 413
 
         try:
             # 1. Parse File
@@ -439,13 +509,18 @@ def confirm_url_import():
 # --- File Save Endpoint ---
 
 @app.route('/save_file', methods=['POST'])
+@require_internal_token
 def save_file():
     """
     Save file content to a project.
     Used by backend to save generated files (e.g., wiki generation).
     Uses X-User-ID header for user-isolated storage.
+    Protected by internal service token.
     """
     data = request.get_json()
+    if not data:
+        return jsonify({'error': 'Request body must be valid JSON'}), 400
+    
     project_id = data.get('project_id')
     file_path = data.get('file_path')  # e.g., "wiki/entities.md"
     content = data.get('content', '')
@@ -453,20 +528,31 @@ def save_file():
     if not project_id or not file_path:
         return jsonify({'error': 'project_id and file_path are required'}), 400
     
+    # Validate content size
+    content_size = len(content.encode('utf-8'))
+    if content_size > MAX_CONTENT_SIZE:
+        return jsonify({'error': f'Content size ({content_size} bytes) exceeds maximum allowed ({MAX_CONTENT_SIZE} bytes)'}), 413
+    
     try:
         # Get the project path with user_id
         project_path = get_project_path(project_id)
         
         # Build full file path and ensure directory exists
         full_path = os.path.join(project_path, file_path)
+        
+        # Validate path to prevent traversal attacks
+        if not validate_project_path(full_path, project_id):
+            logger.warning(f"[{g.user_id}:{project_id}] Path traversal attempt detected: {full_path}")
+            return jsonify({'error': 'Invalid file path'}), 400
+        
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         
         # Write the file
         with open(full_path, 'w', encoding='utf-8') as f:
             f.write(content)
         
-        app.logger.info(f"[{g.user_id}:{project_id}] Saved file: {file_path}")
-        return jsonify({'message': 'File saved successfully', 'path': full_path}), 200
+        app.logger.info(f"[{g.user_id}:{project_id}] Saved file: {file_path} ({content_size} bytes)")
+        return jsonify({'message': 'File saved successfully', 'path': full_path, 'size': content_size}), 200
         
     except Exception as e:
         app.logger.error(f"[{g.user_id}:{project_id}] Failed to save file: {e}", exc_info=True)
@@ -489,6 +575,11 @@ def get_file_content(project_id, filename):
     """Get file content from a project. Uses X-User-ID header for user-isolated storage."""
     project_path = get_project_path(project_id)
     file_path = os.path.join(project_path, filename)
+    
+    # Validate path to prevent traversal attacks
+    if not validate_project_path(file_path, project_id):
+        logger.warning(f"[{g.user_id}:{project_id}] Path traversal attempt detected: {file_path}")
+        return jsonify({'error': 'Invalid file path'}), 400
     
     if not os.path.isfile(file_path):
         return jsonify({'error': 'File not found'}), 404
