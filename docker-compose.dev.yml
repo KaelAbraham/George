@@ -58,11 +58,12 @@ services:
     build:
       context: ./auth_server
       dockerfile: Dockerfile
-    command: python app.py
+    command: ["python", "app.py"]
     expose:
       - "6001"
     volumes:
       - ./persistent_data/auth:/app/data
+      - ./auth_server:/app
     env_file:
       - ./auth_server/.env
     environment:
@@ -75,7 +76,7 @@ services:
     build:
       context: ./filesystem_server
       dockerfile: Dockerfile
-    command: python app.py
+    command: ["python", "app.py"]
     expose:
       - "6002"
     env_file:
@@ -86,6 +87,7 @@ services:
     volumes:
       - ./filesystem_server/uploads:/app/uploads
       - ./filesystem_server/projects:/app/projects
+      - ./filesystem_server:/app
     networks:
       - caudexnet
 
@@ -93,7 +95,7 @@ services:
     build:
       context: ./chroma_server
       dockerfile: Dockerfile
-    command: python app.py
+    command: ["python", "app.py"]
     expose:
       - "6003"
     env_file:
@@ -103,6 +105,7 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - ./chroma_server/data:/app/data
+      - ./chroma_server:/app
     networks:
       - caudexnet
 
@@ -110,7 +113,7 @@ services:
     build:
       context: ./billing_server
       dockerfile: Dockerfile
-    command: python app.py
+    command: ["python", "app.py"]
     expose:
       - "6004"
     env_file:
@@ -125,7 +128,7 @@ services:
     build:
       context: ./git_server
       dockerfile: Dockerfile
-    command: python app.py
+    command: ["python", "app.py"]
     expose:
       - "6005"
     env_file:
@@ -135,6 +138,7 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - ./git_server/projects:/app/projects
+      - ./git_server:/app
     networks:
       - caudexnet
 

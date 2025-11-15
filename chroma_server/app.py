@@ -153,4 +153,8 @@ def get_graph(project_id):
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5002)
+    import os
+    if os.getenv('FLASK_ENV') == 'development':
+        app.run(debug=True, port=6003)
+    else:
+        print("Use gunicorn for production: gunicorn -w 4 -b 0.0.0.0:6003 chroma_server.app:app")

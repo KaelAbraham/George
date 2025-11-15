@@ -142,6 +142,10 @@ def top_up():
         return jsonify({"error": "Invalid amount format"}), 400
 
 if __name__ == '__main__':
-    print("--- Billing Server (The Bank) ---")
-    print("Running on http://localhost:5004")
-    app.run(debug=True, port=5004)
+    import os
+    if os.getenv('FLASK_ENV') == 'development':
+        print("--- Billing Server (The Bank) ---")
+        print("Running on http://localhost:6004")
+        app.run(debug=True, port=6004)
+    else:
+        print("Use gunicorn for production: gunicorn -w 4 -b 0.0.0.0:6004 billing_server.app:app")

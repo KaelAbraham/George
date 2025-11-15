@@ -1469,7 +1469,11 @@ def get_graph_context(user_query: str, project_id: str) -> Tuple[str, bool]:
 
 
 if __name__ == '__main__':
-    print("--- Caudex Pro AI Router (The Brain) ---")
-    print("Ensure all microservices (Auth, Billing, Chroma, Filesystem, Git) are running.")
-    print("Running on http://localhost:5000")
-    app.run(debug=True, port=5000)
+    import os
+    if os.getenv('FLASK_ENV') == 'development':
+        print("--- Caudex Pro AI Router (The Brain) ---")
+        print("Ensure all microservices (Auth, Billing, Chroma, Filesystem, Git) are running.")
+        print("Running on http://localhost:5000")
+        app.run(debug=True, port=5000)
+    else:
+        print("Use gunicorn for production: gunicorn -w 4 -b 0.0.0.0:5000 backend.app:app")

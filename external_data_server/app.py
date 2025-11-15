@@ -53,7 +53,11 @@ def thesaurus():
     return jsonify({"context": combined_context, "source": "datamuse"})
 
 if __name__ == '__main__':
-    # This server will run on a different port, e.g., 5006
-    print("--- External Data Server (The Librarian) ---")
-    print("Running on http://localhost:5006")
-    app.run(debug=True, port=5006)
+    import os
+    if os.getenv('FLASK_ENV') == 'development':
+        # This server will run on a different port, e.g., 6006
+        print("--- External Data Server (The Librarian) ---")
+        print("Running on http://localhost:6006")
+        app.run(debug=True, port=6006)
+    else:
+        print("Use gunicorn for production: gunicorn -w 4 -b 0.0.0.0:6006 external_data_server.app:app")
