@@ -20,7 +20,9 @@ cred = credentials.Certificate("serviceAccountKey.json")
 firebase_admin.initialize_app(cred)
 
 # --- Configuration ---
-BILLING_SERVER_URL = "http://localhost:5004"
+# --- SERVICE DISCOVERY ---
+# Internal service URLs (6000-series ports are reserved for internal services)
+BILLING_SERVER_URL = os.environ.get("BILLING_SERVER_URL", "http://localhost:6004")
 USER_CAP = 500 # Your hard limit
 
 @app.route('/validate_invite', methods=['POST'])

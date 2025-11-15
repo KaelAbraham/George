@@ -74,11 +74,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Service URLs (The "Hands") ---
-AUTH_SERVER_URL = os.environ.get("AUTH_SERVER_URL", "http://localhost:5005")
-BILLING_SERVER_URL = os.environ.get("BILLING_SERVER_URL", "http://localhost:5004")
-CHROMA_SERVER_URL = os.environ.get("CHROMA_SERVER_URL", "http://localhost:5002")
-FILESYSTEM_SERVER_URL = os.environ.get("FILESYSTEM_SERVER_URL", "http://localhost:5001")
-GIT_SERVER_URL = os.environ.get("GIT_SERVER_URL", "http://localhost:5003")
+# Internal service URLs (6000-series ports are reserved for internal services)
+AUTH_SERVER_URL = os.environ.get("AUTH_SERVER_URL", "http://localhost:6001")
+BILLING_SERVER_URL = os.environ.get("BILLING_SERVER_URL", "http://localhost:6004")
+CHROMA_SERVER_URL = os.environ.get("CHROMA_SERVER_URL", "http://localhost:6003")
+FILESYSTEM_SERVER_URL = os.environ.get("FILESYSTEM_SERVER_URL", "http://localhost:6002")
+GIT_SERVER_URL = os.environ.get("GIT_SERVER_URL", "http://localhost:6005")
+EXTERNAL_DATA_SERVER_URL = os.environ.get("EXTERNAL_DATA_SERVER_URL", "http://localhost:6006")
 GRAPH_SERVER_URL = os.environ.get("GRAPH_SERVER_URL", "bolt://localhost:7687")
 
 

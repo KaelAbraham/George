@@ -70,8 +70,8 @@ def extract_user_id():
 # --- NEW: Define allowed extensions set ---
 ALLOWED_EXTENSIONS = {'txt', 'md', 'docx', 'pdf', 'odt'}
 
-# URL for the *next* server in the chain
-CHROMA_SERVER_URL = "http://localhost:5002" 
+# Internal service URLs (6000-series ports are reserved for internal services)
+CHROMA_SERVER_URL = os.getenv("CHROMA_SERVER_URL", "http://localhost:6003") 
 
 # Ensure directories exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)

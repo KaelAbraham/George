@@ -12,7 +12,8 @@ import requests
 logger = logging.getLogger(__name__)
 
 # Define the URL for the chroma_server
-CHROMA_SERVER_URL = "http://localhost:5002"
+# Internal service URLs (6000-series ports are reserved for internal services)
+CHROMA_SERVER_URL = os.environ.get("CHROMA_SERVER_URL", "http://localhost:6003")
 
 # Add backend to path if needed
 current_dir = Path(__file__).parent.parent

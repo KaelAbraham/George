@@ -43,9 +43,10 @@ logging.basicConfig(
 logger = logging.getLogger('IngestionWorker')
 
 # Microservice URLs
-FILESYSTEM_SERVER_URL = os.getenv('FILESYSTEM_SERVER_URL', 'http://localhost:5003')
-CHROMA_SERVER_URL = os.getenv('CHROMA_SERVER_URL', 'http://localhost:5001')
-GIT_SERVER_URL = os.getenv('GIT_SERVER_URL', 'http://localhost:5004')
+# Internal service URLs (6000-series ports are reserved for internal services)
+FILESYSTEM_SERVER_URL = os.getenv('FILESYSTEM_SERVER_URL', 'http://localhost:6002')
+CHROMA_SERVER_URL = os.getenv('CHROMA_SERVER_URL', 'http://localhost:6003')
+GIT_SERVER_URL = os.getenv('GIT_SERVER_URL', 'http://localhost:6005')
 
 # Worker configuration
 POLL_INTERVAL = 5  # Check queue every 5 seconds
