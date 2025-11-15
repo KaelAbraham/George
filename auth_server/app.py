@@ -218,6 +218,16 @@ def register_user():
     Step 2 of Sign-Up: Called AFTER Firebase creates the user.
     This records them in our local DB and consumes the invite.
     
+    SECURITY MODEL:
+    - Client authentication: Firebase ID token (user must have created account in Firebase)
+    - Service authentication: X-INTERNAL-TOKEN header for calls to billing_server
+    - Downstream enforcement: billing_server validates X-INTERNAL-TOKEN before allowing account creation
+    
+    This prevents:
+    1. Unauthenticated users from registering (Firebase token required)
+    2. Unauthorized billing account creation (internal token required)
+    3. Half-created users (billing must succeed before persisting local user)
+    
     Validates:
     - id_token is valid Firebase ID token
     - email exists in token
@@ -275,6 +285,8 @@ def register_user():
         
         # 6. INITIALIZE BILLING ACCOUNT: Call Billing Server BEFORE persisting user
         # This ensures if billing fails, we don't leave a half-created user in the system
+        # SECURITY: Billing Server validates X-INTERNAL-TOKEN header (see @require_internal_token decorator)
+        # This prevents unauthorized direct access to /account endpoint
         headers = get_internal_headers()
         try:
             resp = requests.post(
@@ -283,7 +295,7 @@ def register_user():
                     "user_id": user_id,
                     "tier": invite_status['role']
                 },
-                headers=headers,
+                headers=headers,  # REQUIRED: Contains X-INTERNAL-TOKEN for billing server validation
                 timeout=5
             )
             resp.raise_for_status()
