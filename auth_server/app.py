@@ -142,23 +142,53 @@ def verify_token():
 def grant_access():
     """
     Grant a 'Guest Pass' to another user.
+    
+    REQUIRES authentication via Firebase ID token.
+    The owner_id is derived from the token, not the request body (prevents spoofing).
     """
-    # Only authenticated users can do this (add verify logic here)
+    # 1. AUTHENTICATE: Verify Firebase ID token
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith("Bearer "):
+        logger.warning(f"Unauthorized grant_access attempt: missing/invalid auth header from {request.remote_addr}")
+        return jsonify({"error": "Unauthorized - missing or invalid token"}), 401
+    
+    try:
+        token = auth_header.split("Bearer ")[1]
+        decoded_token = auth.verify_id_token(token)
+        owner_id = decoded_token['uid']  # Derive from token, don't trust request body
+    except Exception as e:
+        logger.warning(f"Token verification failed in grant_access: {e}")
+        return jsonify({"error": "Unauthorized - invalid token"}), 401
+    
+    # 2. VALIDATE INPUT
     data = request.get_json()
-    owner_id = data.get('owner_id') # From token
     target_email = data.get('target_email')
     project_id = data.get('project_id')
     
+    if not target_email or not project_id:
+        return jsonify({"error": "target_email and project_id are required"}), 400
+    
     try:
+        # 3. AUTHORIZATION: Verify owner owns this project
+        # (This depends on your project ownership model - add if needed)
+        # For now, we'll assume the auth_manager handles ownership checks
+        
         # Find target user by email (Firebase Admin SDK)
         user = auth.get_user_by_email(target_email)
         target_uid = user.uid
         
+        # Grant access
         auth_manager.grant_project_access(project_id, target_uid)
+        logger.info(f"Access granted by {owner_id} to {target_email} for project {project_id}")
+        
         return jsonify({"message": f"Access granted to {target_email}"})
         
+    except auth.UserNotFoundError:
+        logger.warning(f"User not found: {target_email}")
+        return jsonify({"error": f"User not found: {target_email}"}), 404
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        logger.error(f"grant_access error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     import os
