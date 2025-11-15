@@ -353,6 +353,45 @@ def proxy_login():
         return jsonify({"error": "Login service is unavailable"}), 503
 
 
+@app.route('/v1/api/auth/register', methods=['POST'])
+def proxy_register():
+    """
+    Proxies the registration request to the Auth Server.
+    Does not log the user in; just creates the account.
+    
+    Expected payload:
+    {
+        "email": "user@example.com",
+        "password": "secure_password",
+        "invite_code": "VALID_INVITE_CODE"
+    }
+    
+    Returns:
+        201 on success with user data
+        400 on validation error (e.g., email already exists, invalid invite)
+        503 if auth service is unavailable
+    """
+    try:
+        # 1. Forward registration data to Auth Server
+        data = request.get_json()
+        resp = requests.post(
+            f"{AUTH_SERVER_URL}/register",  # Calls the /register route on the auth hand
+            json=data,
+            timeout=5
+        )
+        resp.raise_for_status()  # Raise an error for bad responses (400, 500, etc.)
+
+        # 2. On success, just return the success message (no login needed)
+        return resp.json(), resp.status_code
+
+    except requests.exceptions.HTTPError as e:
+        # Forward the auth server's error (e.g., "Email already in use", "Invalid invite code")
+        return jsonify(e.response.json()), e.response.status_code
+    except Exception as e:
+        logger.error(f"Error in /register proxy: {e}", exc_info=True)
+        return jsonify({"error": "Registration service is unavailable"}), 503
+
+
 @app.route('/v1/api/auth/logout', methods=['POST'])
 def proxy_logout():
     """
