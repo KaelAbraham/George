@@ -23,6 +23,7 @@ from session_manager import SessionManager
 from job_manager import JobManager
 from feedback_manager import FeedbackManager
 from distributed_saga import WikiGenerationSaga
+from cost_tracking import CostTracker
 # This is your premium report/wiki generator
 try:
     from knowledge_extraction.orchestrator import KnowledgeExtractor as KnowledgeExtractionOrchestrator
@@ -113,6 +114,12 @@ try:
     session_manager = SessionManager()
     job_manager = JobManager()
     feedback_manager = FeedbackManager()
+    
+    # Initialize cost tracker for robust billing with pre-authorization
+    cost_tracker = CostTracker(
+        billing_server_url=BILLING_SERVER_URL,
+        internal_headers=get_internal_headers()
+    )
     
     # Initialize orchestrator only if import succeeded AND all dependencies available
     if KnowledgeExtractionOrchestrator:
@@ -609,7 +616,19 @@ class Chat(MethodView):
             if billing_server_failed:
                 logger.warning(f"[FAIL-OPEN] Billing server failed for user {user_id}. Allowing Pro model.")
 
-            # 2. Select Model based on Governor
+            # 2. PRE-AUTHORIZE: Reserve funds before expensive LLM call
+            # Estimate cost based on model complexity (Flash ~$0.01, Pro ~$0.05)
+            estimated_cost = 0.05 if not billing_server_failed else 0.0  # Skip auth if billing failed
+            reservation_id = None
+            
+            if estimated_cost > 0:
+                reservation_id = cost_tracker.reserve_funds(user_id, estimated_cost)
+                if not reservation_id:
+                    # Pre-auth failed: user has insufficient funds
+                    logger.warning(f"[PREAUTH] Pre-authorization failed for user {user_id}. Insufficient funds.")
+                    abort(402, message="Insufficient balance to complete this request.")
+
+            # 3. Select Model based on Governor
             model_to_use = answer_client_flash
             downgrade_flag = False
             
@@ -633,7 +652,7 @@ class Chat(MethodView):
                  downgrade_flag = True  # Guests are always "downgraded" for complex tasks
                  logger.info(f"User {user_id} is a GUEST. Forcing FLASH model for complex task.")
 
-            # 3. Assemble Main Prompt
+            # 4. Assemble Main Prompt
             main_prompt = f"""
             {GEORGE_CONSTITUTION}
 
@@ -648,15 +667,30 @@ class Chat(MethodView):
             Based *only* on the RETRIEVED CONTEXT, answer the USER QUERY.
             """
             
-            # 4. Get Draft Answer
-            # We pass the history_list (Gemini-formatted) to the chat() method
-            result_dict = model_to_use.chat(main_prompt, history=history_list)
-            draft_answer = result_dict['response']
-            call_cost = result_dict.get('cost', 0.0)
-
-            # 5. Report Cost to Billing Server
-            if call_cost > 0:
-                deduct_cost(user_id, f"chat-{uuid.uuid4()}", call_cost, f"Chat: {intent}")
+            # 5. Get Draft Answer with automatic cleanup on failure
+            try:
+                result_dict = model_to_use.chat(main_prompt, history=history_list)
+                draft_answer = result_dict['response']
+                call_cost = result_dict.get('cost', 0.0)
+                
+                # 6. CAPTURE: Charge actual cost after successful operation
+                if reservation_id and call_cost > 0:
+                    if not cost_tracker.capture_funds(reservation_id, call_cost):
+                        # Capture failed but user got the answer
+                        # Log this as a critical billing error for investigation
+                        logging.error(f"[CRITICAL] Capture failed for {user_id}: answer delivered but not charged. Reservation: {reservation_id}")
+                        # Don't fail the response to user - they already got the answer
+                        # The reconciliation service will handle this
+                elif reservation_id and call_cost == 0:
+                    # Cost was 0, release the reservation
+                    cost_tracker.release_funds(reservation_id)
+                
+            except Exception as e:
+                # 7. RELEASE: Return reserved funds on LLM call failure
+                if reservation_id:
+                    logger.warning(f"[RELEASE] LLM call failed for {user_id}. Releasing reservation {reservation_id}")
+                    cost_tracker.release_funds(reservation_id)
+                raise
 
             # --- CALL 3: "GEORGEIFICATION" POLISH ---
             
