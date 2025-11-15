@@ -1171,11 +1171,24 @@ def _get_user_from_request(request) -> Optional[Dict[str, Any]]:
     """
     Helper to call the Auth Server and verify the user's token,
     which is now stored in a secure HttpOnly cookie.
+    
+    In development mode (when DEV_MODE=true), uses a fixed mock user ID
+    to preserve job ownership across requests.
     """
     # 1. Get token from the cookie
     token = request.cookies.get('auth_token')
 
     if not token:
+        # Development mode fallback - use fixed mock user ID
+        if os.getenv('DEV_MODE') == 'true':
+            mock_user_id = os.getenv('DEV_MOCK_USER_ID', 'dev-mock-user-1')
+            logging.debug(f"Dev mode: using mock user {mock_user_id}")
+            return {
+                'user_id': mock_user_id,
+                'valid': True,
+                'role': 'admin',  # Give dev user admin privileges
+                'guest_projects': []
+            }
         return None  # No cookie, not authenticated
 
     try:
