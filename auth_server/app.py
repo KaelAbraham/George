@@ -344,6 +344,8 @@ def verify_token(user_id):
     
     SECURITY: Returns 403 Forbidden if user exists in Firebase but is not registered
     in our system (prevents unregistered users from accessing the API).
+    
+    ANALYTICS: Updates last_login timestamp for monitoring and analytics purposes.
     """
     try:
         # Get Internal Role - returns None if user not found in our database
@@ -353,6 +355,13 @@ def verify_token(user_id):
         if role is None:
             logger.warning(f"Attempt to access API with unregistered Firebase user: {user_id}")
             return jsonify({"valid": False, "error": "User not registered"}), 403
+        
+        # ANALYTICS: Update last login timestamp for account health monitoring
+        try:
+            auth_manager.update_last_login(user_id)
+        except Exception as e:
+            # Log the error but don't fail the request - last_login is not critical to auth
+            logger.warning(f"Failed to update last_login for {user_id}: {e}")
         
         return jsonify({
             "valid": True, 
