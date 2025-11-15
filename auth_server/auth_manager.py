@@ -253,18 +253,25 @@ class AuthManager:
         """
         Get a user's role.
         
+        SECURITY: Returns None if user does not exist (not 'guest').
+        This prevents treating unregistered/deleted/malicious users as valid guests.
+        
         Args:
             user_id: The user's Firebase UID
             
         Returns:
-            The user's role ('admin' or 'guest'), or 'guest' if not found
+            The user's role ('admin' or 'guest'), or None if user not found
         """
         with self._get_conn() as conn:
             cursor = conn.execute("SELECT role FROM users WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
-            role = row['role'] if row else 'guest'
-            logger.debug(f"User {user_id} has role: {role}")
-            return role
+            
+            if row:
+                logger.debug(f"User {user_id} has role: {row['role']}")
+                return row['role']
+            else:
+                logger.warning(f"User {user_id} not found in database")
+                return None
 
     def get_user_info(self, user_id: str) -> dict:
         """

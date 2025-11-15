@@ -341,10 +341,18 @@ def verify_token(user_id):
     Called by backend/app.py to check if a request is allowed.
     Automatically extracts user_id from Firebase token via decorator.
     Rate limited: 10 requests/second
+    
+    SECURITY: Returns 403 Forbidden if user exists in Firebase but is not registered
+    in our system (prevents unregistered users from accessing the API).
     """
     try:
-        # Get Internal Role
+        # Get Internal Role - returns None if user not found in our database
         role = auth_manager.get_user_role(user_id)
+        
+        # CRITICAL: Reject unregistered users (Firebase token exists but no local user record)
+        if role is None:
+            logger.warning(f"Attempt to access API with unregistered Firebase user: {user_id}")
+            return jsonify({"valid": False, "error": "User not registered"}), 403
         
         return jsonify({
             "valid": True, 
