@@ -271,13 +271,13 @@ class SaveNoteResponseSchema(ma.Schema):
 
 class BookmarkRequestSchema(ma.Schema):
     """Request schema for bookmarking a chat message."""
-    is_bookmarked = ma.fields.Bool(required=True, description="Set to true to bookmark, false to unbookmark.")
+    is_bookmarked = ma.fields.Bool(required=True)
 
 class BookmarkResponseSchema(ma.Schema):
     """Response schema for bookmark operations."""
-    status = ma.fields.Str(description="'updated' on success")
-    message_id = ma.fields.Str(description="The message ID that was bookmarked")
-    is_bookmarked = ma.fields.Bool(description="The new bookmark state")
+    status = ma.fields.Str()
+    message_id = ma.fields.Str()
+    is_bookmarked = ma.fields.Bool()
 
 class BookmarkListSchema(ma.Schema):
     """Schema for a bookmarked message in the list."""
