@@ -74,40 +74,95 @@ def register_user():
     """
     Step 2 of Sign-Up: Called AFTER Firebase creates the user.
     This records them in our local DB and consumes the invite.
+    
+    Validates:
+    - id_token is valid Firebase ID token
+    - email exists in token
+    - invite_code is valid
+    - user doesn't already exist
     """
+    # 1. VALIDATE INPUT: Check required fields
     data = request.get_json()
+    if not data:
+        return jsonify({"error": "Request body is required"}), 400
+    
     id_token = data.get('id_token')
     invite_code = data.get('invite_code')
+    
+    if not id_token or not isinstance(id_token, str):
+        logger.warning(f"register_user: missing or invalid id_token from {request.remote_addr}")
+        return jsonify({"error": "id_token is required and must be a string"}), 400
+    
+    if not invite_code or not isinstance(invite_code, str):
+        logger.warning(f"register_user: missing or invalid invite_code from {request.remote_addr}")
+        return jsonify({"error": "invite_code is required and must be a string"}), 400
 
     try:
-        # Verify the Firebase Token to get the UID
+        # 2. VERIFY TOKEN: Decode Firebase ID token
         decoded_token = auth.verify_id_token(id_token)
-        user_id = decoded_token['uid']
+        user_id = decoded_token.get('uid')
         email = decoded_token.get('email')
+        email_verified = decoded_token.get('email_verified', False)
         
-        # Re-validate invite (double check)
+        # 3. VALIDATE TOKEN CONTENTS: Ensure email exists and is verified
+        if not email:
+            logger.warning(f"register_user: Firebase token missing email for user {user_id}")
+            return jsonify({"error": "Firebase token must have an email"}), 400
+        
+        # Optionally enforce email verification (set to True for production)
+        if not email_verified:
+            logger.warning(f"register_user: Email not verified for {email}")
+            # Could return 400 to require verification:
+            # return jsonify({"error": "Email must be verified"}), 400
+            # For now, allow but log it
+            pass
+        
+        # 4. VALIDATE INVITE: Check code is valid and not consumed
         invite_status = auth_manager.validate_and_consume_invite(invite_code)
-        if not invite_status['valid']:
-             return jsonify({"error": "Invalid invite code"}), 403
-
-        # Create User Record
-        auth_manager.create_user(user_id, email, role=invite_status['role'])
+        if not invite_status.get('valid'):
+            error_msg = invite_status.get('error', 'Invalid invite code')
+            logger.warning(f"register_user: Invalid invite code '{invite_code}': {error_msg}")
+            return jsonify({"error": error_msg}), 403
         
-        # Consume Invite
+        # 5. CHECK DUPLICATE: Ensure user doesn't already exist
+        existing_user = auth_manager.get_user_role(user_id)
+        if existing_user:
+            logger.warning(f"register_user: User {user_id} already exists")
+            return jsonify({"error": "User already registered"}), 409
+        
+        # 6. CREATE USER: Record in local DB
+        auth_manager.create_user(user_id, email, role=invite_status['role'])
+        logger.info(f"register_user: Created user {user_id} with email {email}")
+        
+        # 7. CONSUME INVITE: Decrement uses
         auth_manager.decrement_invite(invite_code)
         
-        # Initialize Billing Account (Call Billing Server)
+        # 8. INITIALIZE BILLING ACCOUNT: Call Billing Server
         headers = get_internal_headers()
-        requests.post(f"{BILLING_SERVER_URL}/account", json={
-            "user_id": user_id,
-            "tier": invite_status['role']
-        }, headers=headers)
-
+        try:
+            requests.post(f"{BILLING_SERVER_URL}/account", json={
+                "user_id": user_id,
+                "tier": invite_status['role']
+            }, headers=headers, timeout=5)
+        except Exception as billing_error:
+            logger.error(f"Failed to initialize billing account for {user_id}: {billing_error}")
+            # Don't fail registration if billing is down, but log it prominently
+        
+        logger.info(f"register_user: Successfully registered {email} ({user_id})")
         return jsonify({"status": "success", "user_id": user_id}), 201
 
+    except auth.InvalidIdTokenError as e:
+        logger.warning(f"register_user: Invalid ID token format: {e}")
+        return jsonify({"error": "Invalid or expired token"}), 401
+    except auth.ExpiredIdTokenError as e:
+        logger.warning(f"register_user: Expired ID token: {e}")
+        return jsonify({"error": "Token has expired"}), 401
+    except auth.RevokedIdTokenError as e:
+        logger.warning(f"register_user: Revoked ID token: {e}")
+        return jsonify({"error": "Token has been revoked"}), 401
     except Exception as e:
-        logger.error(f"Registration failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"register_user: Unexpected error: {e}", exc_info=True)
+        return jsonify({"error": "Registration failed - please try again"}), 500
 
 @app.route('/verify_token', methods=['GET'])
 def verify_token():
