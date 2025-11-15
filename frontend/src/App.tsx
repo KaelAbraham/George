@@ -47,10 +47,8 @@ function App() {
     <AppProvider>
       <BrowserRouter>
         <Routes>
-          {/* Public Login Route */}
+          {/* Public Routes FIRST - these should NOT be protected */}
           <Route path="/login" element={<LoginView />} />
-
-          {/* Public Register Route */}
           <Route path="/register" element={<RegisterView />} />
 
           {/* Protected App Routes */}
@@ -59,8 +57,8 @@ function App() {
             {/* Add other app routes here */}
           </Route>
 
-          {/* Catch-all redirect */}
-          <Route path="*" element={<Navigate to="/" replace />} />
+          {/* Catch-all redirect - send unauthenticated users to login */}
+          <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </BrowserRouter>
     </AppProvider>
