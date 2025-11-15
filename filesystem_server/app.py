@@ -38,6 +38,20 @@ app.config['MAX_CONTENT_LENGTH_JSON'] = 10 * 1024 * 1024  # 10MB for JSON payloa
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB for file uploads
 MAX_CONTENT_SIZE = 5 * 1024 * 1024  # 5MB for save_file endpoint content
 
+# --- SECURITY: Explicit development mode flag ---
+# CRITICAL: Do NOT rely on missing env vars for security mode detection.
+# Always require explicit opt-in to development/insecure mode.
+#
+# Set FS_DEV_MODE=true ONLY in development environments.
+# Production must have:
+#   - FS_DEV_MODE not set (or =false)
+#   - X-INTERNAL-TOKEN configured
+#
+# If FS_DEV_MODE=true and INTERNAL_TOKEN is missing, we allow dev-mode operation.
+# If FS_DEV_MODE is NOT set (or =false) and INTERNAL_TOKEN is missing, we REJECT all requests.
+FS_DEV_MODE = os.getenv("FS_DEV_MODE", "").lower() in ("true", "1", "yes")
+INTERNAL_TOKEN_ENV = os.getenv("INTERNAL_SERVICE_TOKEN")
+
 # --- MIDDLEWARE: Validate internal token and extract user_id ---
 @app.before_request
 def validate_token_and_extract_user_id():
@@ -48,40 +62,61 @@ def validate_token_and_extract_user_id():
         X-User-ID: victim-user-123
     to access another user's files.
     
-    By requiring the internal token, we ensure that X-User-ID only comes from
-    authenticated backend services that we trust.
+    DEVELOPMENT MODE:
+    - Set FS_DEV_MODE=true explicitly (must be intentional)
+    - Only in dev mode with FS_DEV_MODE=true and no INTERNAL_TOKEN, allow header spoofing
+    
+    PRODUCTION MODE (default):
+    - FS_DEV_MODE not set or set to false
+    - X-INTERNAL-TOKEN must be configured and valid
+    - Missing token → 403 Forbidden for ALL requests
+    - Missing env var doesn't accidentally disable security
     
     Flow:
-    1. Validate X-INTERNAL-TOKEN matches INTERNAL_SERVICE_TOKEN
-    2. Only if token is valid, extract and use X-User-ID
-    3. Reject all requests without valid token (403 Forbidden)
+    1. Check if FS_DEV_MODE=true AND no INTERNAL_TOKEN → dev mode (allow insecure)
+    2. Check if INTERNAL_TOKEN configured → production mode (enforce token validation)
+    3. Otherwise → reject all requests (fail secure)
     """
     
-    # In dev mode, if no token is configured, allow all requests (for development)
-    if not INTERNAL_TOKEN:
-        # Dev mode: extract user_id without validation
+    # Development mode: Explicitly opted-in with FS_DEV_MODE=true
+    if FS_DEV_MODE and not INTERNAL_TOKEN_ENV:
+        # Dev mode: extract user_id without validation (for testing)
         user_id = request.headers.get('X-User-ID', 'default')
         g.user_id = user_id
+        logger.debug(f"DEV MODE: Allowing unvalidated user_id={user_id} from {request.remote_addr}")
         return
     
-    # Production mode: token is configured, enforce it
-    received_token = request.headers.get('X-INTERNAL-TOKEN')
+    # Production mode: Token must be configured
+    if INTERNAL_TOKEN_ENV:
+        received_token = request.headers.get('X-INTERNAL-TOKEN')
+        
+        # Validate token
+        if not received_token or received_token != INTERNAL_TOKEN_ENV:
+            logger.warning(
+                f"Unauthorized request: invalid/missing X-INTERNAL-TOKEN from {request.remote_addr}"
+            )
+            return jsonify({"error": "Unauthorized - invalid internal token"}), 403
+        
+        # Token is valid, now we can trust X-User-ID
+        user_id = request.headers.get('X-User-ID', 'default')
+        if not user_id:
+            logger.warning(f"Request with valid token but missing X-User-ID from {request.remote_addr}")
+            user_id = 'default'
+        
+        g.user_id = user_id
+        logger.debug(f"Authorized request for user {user_id} with valid internal token")
+        return
     
-    # Validate token
-    if not received_token or received_token != INTERNAL_TOKEN:
-        logger.warning(
-            f"Unauthorized request: invalid/missing X-INTERNAL-TOKEN from {request.remote_addr}"
-        )
-        return jsonify({"error": "Unauthorized - invalid internal token"}), 403
-    
-    # Token is valid, now we can trust X-User-ID
-    user_id = request.headers.get('X-User-ID', 'default')
-    if not user_id:
-        logger.warning(f"Request with valid token but missing X-User-ID from {request.remote_addr}")
-        user_id = 'default'
-    
-    g.user_id = user_id
-    logger.debug(f"Authorized request for user {user_id} with valid internal token")
+    # Neither dev mode nor production token configured: FAIL SECURE
+    # This catches the case where someone forgets to set either env var in production
+    logger.error(
+        f"SECURITY: Rejecting request from {request.remote_addr} - "
+        f"FS_DEV_MODE={FS_DEV_MODE}, INTERNAL_TOKEN configured={bool(INTERNAL_TOKEN_ENV)}. "
+        f"Set FS_DEV_MODE=true for dev, or configure X-INTERNAL-TOKEN for production."
+    )
+    return jsonify({
+        "error": "Server misconfigured - neither development mode nor internal token configured"
+    }), 500
 
 # --- NEW: Define allowed extensions set ---
 ALLOWED_EXTENSIONS = {'txt', 'md', 'docx', 'pdf', 'odt'}
