@@ -1,6 +1,8 @@
 import os
 import logging
 import requests
+import base64
+import json
 from flask import Flask, request, jsonify
 import firebase_admin
 from firebase_admin import credentials, auth
@@ -15,9 +17,42 @@ logger = logging.getLogger(__name__)
 auth_manager = AuthManager()
 
 # --- Firebase Setup ---
-# Ideally, put your serviceAccountKey.json in a secure folder or use ENV variables
-cred = credentials.Certificate("serviceAccountKey.json") 
-firebase_admin.initialize_app(cred)
+# SECURITY: Load Firebase service account from environment variable (base64 encoded)
+# Never commit serviceAccountKey.json to git!
+#
+# To set up:
+# 1. Download serviceAccountKey.json from Firebase Console
+# 2. Encode to base64: cat serviceAccountKey.json | base64
+# 3. Set environment variable: export GOOGLE_CREDENTIALS_BASE64="<base64-encoded-json>"
+#
+# Development: Create .env file with:
+#   GOOGLE_CREDENTIALS_BASE64=<base64-encoded-json>
+#
+try:
+    google_creds_b64 = os.environ.get("GOOGLE_CREDENTIALS_BASE64")
+    if not google_creds_b64:
+        # Fallback for development: try loading from file (must be in .gitignore)
+        try:
+            with open("serviceAccountKey.json", "r") as f:
+                cred_dict = json.load(f)
+            cred = credentials.Certificate(cred_dict)
+            logger.warning("⚠️  Using serviceAccountKey.json from disk - set GOOGLE_CREDENTIALS_BASE64 for production")
+        except FileNotFoundError:
+            logger.error("ERROR: GOOGLE_CREDENTIALS_BASE64 env var not set and serviceAccountKey.json not found")
+            logger.error("Set GOOGLE_CREDENTIALS_BASE64 environment variable with base64-encoded service account JSON")
+            raise
+    else:
+        # Production: Decode base64 credentials
+        cred_json = base64.b64decode(google_creds_b64).decode('utf-8')
+        cred_dict = json.loads(cred_json)
+        cred = credentials.Certificate(cred_dict)
+        logger.info("✓ Firebase credentials loaded from GOOGLE_CREDENTIALS_BASE64")
+    
+    firebase_admin.initialize_app(cred)
+    logger.info("✓ Firebase initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize Firebase: {e}")
+    raise
 
 # --- Configuration ---
 # --- SERVICE DISCOVERY ---
