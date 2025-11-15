@@ -16,7 +16,8 @@ from firebase_admin import credentials, auth
 sys.path.insert(0, str(Path(__file__).parent.parent / 'backend'))
 
 from auth_manager import AuthManager
-from service_utils import require_internal_token
+from pending_billing_queue import PendingBillingQueue
+from service_utils import require_internal_token, ResilientServiceClient, ServiceUnavailable
 
 # Initialize Flask
 app = Flask(__name__)
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize Managers
 auth_manager = AuthManager()
+pending_billing_queue = PendingBillingQueue()
 
 # --- RATE LIMITING ---
 # Simple in-memory rate limiter to prevent brute-force attacks
@@ -167,6 +169,16 @@ BILLING_SERVER_URL = os.environ.get("BILLING_SERVER_URL", "http://localhost:6004
 INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN")
 USER_CAP = 500 # Your hard limit
 
+# Initialize resilient billing client
+billing_client = ResilientServiceClient(
+    base_url=BILLING_SERVER_URL,
+    service_name="billing_server",
+    timeout=5.0,
+    max_retries=2,  # Fast fail during registration - queue if fails
+    circuit_breaker_threshold=3,
+    circuit_breaker_timeout=30
+)
+
 def get_internal_headers():
     """Get headers dict with internal service token for requests to other services."""
     if INTERNAL_SERVICE_TOKEN:
@@ -290,31 +302,55 @@ def register_user():
             logger.warning(f"register_user: User {user_id} already exists")
             return jsonify({"error": "User already registered"}), 409
         
-        # 6. INITIALIZE BILLING ACCOUNT: Call Billing Server BEFORE persisting user
-        # This ensures if billing fails, we don't leave a half-created user in the system
+        # 6. INITIALIZE BILLING ACCOUNT: Try to create billing account with resilience
+        # CHANGED: Now uses ResilientServiceClient with exponential backoff and circuit breaker
+        # If billing_server is down, we queue for retry instead of blocking user registration
+        # This prevents "zombie users" (Firebase account exists but no billing account)
         # SECURITY: Billing Server validates X-INTERNAL-TOKEN header (see @require_internal_token decorator)
-        # This prevents unauthorized direct access to /account endpoint
         headers = get_internal_headers()
+        billing_created = False
+        billing_error = None
+        
         try:
-            resp = requests.post(
-                f"{BILLING_SERVER_URL}/account",
+            # Try to create billing account immediately with resilient client
+            resp = billing_client.post(
+                "/account",
                 json={
                     "user_id": user_id,
                     "tier": invite_status['role']
                 },
-                headers=headers,  # REQUIRED: Contains X-INTERNAL-TOKEN for billing server validation
-                timeout=5
+                headers=headers
             )
-            resp.raise_for_status()
-            logger.info(f"register_user: Billing account initialized for {user_id}")
-        except requests.exceptions.RequestException as e:
-            logger.error(
-                f"register_user: Failed to initialize billing account for {user_id}: {e}",
-                exc_info=True
+            
+            if resp.status_code == 201:
+                billing_created = True
+                logger.info(f"register_user: Billing account initialized for {user_id}")
+            else:
+                billing_error = f"Unexpected status {resp.status_code}: {resp.text}"
+                raise Exception(billing_error)
+                
+        except ServiceUnavailable as e:
+            # Billing server is down/circuit open - queue for retry
+            billing_error = f"Billing service unavailable: {e}"
+            logger.warning(
+                f"register_user: Billing server unavailable for {user_id}. "
+                f"Queuing for background retry. User can log in immediately."
             )
-            return jsonify({
-                "error": "Account initialization failed. Please try again or contact support."
-            }), 503
+        except Exception as e:
+            # Other errors (timeout, connection error, etc.) - also queue for retry
+            billing_error = str(e)
+            logger.warning(
+                f"register_user: Billing account creation failed for {user_id}: {e}. "
+                f"Queuing for background retry."
+            )
+        
+        # If billing creation failed, queue for background retry
+        if not billing_created:
+            pending_billing_queue.enqueue(user_id, invite_status['role'], billing_error)
+            logger.info(
+                f"register_user: User {user_id} queued for billing account creation. "
+                f"User can log in and use the app immediately."
+            )
         
         # 7. CREATE USER AND CONSUME INVITE: Atomic transaction (both succeed or both fail)
         # This ensures no half-created users even if one operation fails
@@ -533,6 +569,133 @@ def get_project_owner_internal(project_id):
     except Exception as e:
         logger.error(f"Error in /internal/project_owner/{project_id}: {e}", exc_info=True)
         return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/admin/retry_pending_billing', methods=['POST'])
+@require_internal_token
+def retry_pending_billing():
+    """
+    Background worker endpoint to retry pending billing account creations.
+    
+    This endpoint should be called periodically (e.g., via cron or task scheduler)
+    to process users who registered when billing_server was unavailable.
+    
+    The queue uses exponential backoff:
+    - Attempt 1: Immediate (during registration)
+    - Attempt 2: 30 seconds later
+    - Attempt 3: 2 minutes later
+    - Attempt 4: 8 minutes later
+    - Attempt 5: 32 minutes later
+    - After 5 attempts: Marked as failed_permanent, requires manual intervention
+    
+    SECURITY: Protected by @require_internal_token to prevent unauthorized access.
+    Only internal services or admin scripts should call this endpoint.
+    
+    Returns:
+        JSON summary of retry results:
+        - total_pending: Number of items ready for retry
+        - attempts: Number of retry attempts made
+        - successes: Number of successfully created accounts
+        - failures: Number of failed attempts (will retry later)
+        - permanent_failures: Number of items that exceeded max retries
+    """
+    try:
+        logger.info("[BILLING-RETRY] Starting pending billing account retry worker")
+        
+        # Get all pending items ready for retry
+        pending_items = pending_billing_queue.get_pending_items()
+        
+        if not pending_items:
+            logger.info("[BILLING-RETRY] No pending billing accounts to retry")
+            return jsonify({
+                "status": "success",
+                "total_pending": 0,
+                "message": "No pending billing accounts"
+            }), 200
+        
+        logger.info(f"[BILLING-RETRY] Found {len(pending_items)} pending billing accounts")
+        
+        # Process each pending item
+        successes = 0
+        failures = 0
+        permanent_failures = 0
+        headers = get_internal_headers()
+        
+        for item in pending_items:
+            user_id = item['user_id']
+            tier = item['tier']
+            retry_count = item['retry_count']
+            
+            logger.info(
+                f"[BILLING-RETRY] Retrying billing account for {user_id} "
+                f"(attempt {retry_count + 1}/{item['max_retries']})"
+            )
+            
+            try:
+                # Try to create billing account with resilient client
+                resp = billing_client.post(
+                    "/account",
+                    json={"user_id": user_id, "tier": tier},
+                    headers=headers
+                )
+                
+                if resp.status_code == 201:
+                    # Success!
+                    pending_billing_queue.mark_retry_attempt(user_id, success=True)
+                    successes += 1
+                    logger.info(f"[BILLING-RETRY] ✓ Successfully created billing account for {user_id}")
+                else:
+                    # Unexpected status code
+                    error_msg = f"Status {resp.status_code}: {resp.text}"
+                    pending_billing_queue.mark_retry_attempt(user_id, success=False, error_message=error_msg)
+                    failures += 1
+                    logger.warning(f"[BILLING-RETRY] Failed for {user_id}: {error_msg}")
+                    
+            except ServiceUnavailable as e:
+                # Billing server still unavailable
+                error_msg = f"Service unavailable: {e}"
+                pending_billing_queue.mark_retry_attempt(user_id, success=False, error_message=error_msg)
+                failures += 1
+                logger.warning(f"[BILLING-RETRY] Service unavailable for {user_id}, will retry later")
+                
+            except Exception as e:
+                # Other errors (timeout, connection, etc.)
+                error_msg = str(e)
+                pending_billing_queue.mark_retry_attempt(user_id, success=False, error_message=error_msg)
+                failures += 1
+                logger.error(f"[BILLING-RETRY] Error for {user_id}: {e}", exc_info=True)
+        
+        # Check for permanent failures (exceeded max retries)
+        permanent_failures = pending_billing_queue.get_failed_permanent_count()
+        
+        result = {
+            "status": "success",
+            "total_pending": len(pending_items),
+            "attempts": len(pending_items),
+            "successes": successes,
+            "failures": failures,
+            "permanent_failures": permanent_failures
+        }
+        
+        logger.info(
+            f"[BILLING-RETRY] Completed: {successes} successes, {failures} failures, "
+            f"{permanent_failures} permanent failures"
+        )
+        
+        # Alert if there are permanent failures requiring manual intervention
+        if permanent_failures > 0:
+            logger.error(
+                f"[BILLING-RETRY] ⚠️ ALERT: {permanent_failures} users with permanent billing failures! "
+                f"Manual intervention required. Check pending_billing table for details."
+            )
+        
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logger.error(f"[BILLING-RETRY] Worker failed: {e}", exc_info=True)
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
 
 if __name__ == '__main__':
     import os
