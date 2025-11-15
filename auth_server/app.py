@@ -3,6 +3,9 @@ import logging
 import requests
 import base64
 import json
+import time
+from functools import wraps
+from collections import defaultdict
 from flask import Flask, request, jsonify
 import firebase_admin
 from firebase_admin import credentials, auth
@@ -15,6 +18,52 @@ logger = logging.getLogger(__name__)
 
 # Initialize Managers
 auth_manager = AuthManager()
+
+# --- RATE LIMITING ---
+# Simple in-memory rate limiter to prevent brute-force attacks
+# Stores (IP, endpoint) → list of timestamps
+rate_limit_store = defaultdict(list)
+
+def rate_limit(max_requests=5, window_seconds=1):
+    """
+    Simple rate limiter decorator.
+    
+    Args:
+        max_requests: Max requests allowed in the window
+        window_seconds: Time window in seconds
+    
+    Returns:
+        429 Too Many Requests if limit exceeded
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            # Get client IP
+            client_ip = request.remote_addr
+            endpoint = request.path
+            key = (client_ip, endpoint)
+            
+            # Get current time
+            now = time.time()
+            
+            # Clean old requests outside the window
+            rate_limit_store[key] = [
+                timestamp for timestamp in rate_limit_store[key]
+                if now - timestamp < window_seconds
+            ]
+            
+            # Check if limit exceeded
+            if len(rate_limit_store[key]) >= max_requests:
+                logger.warning(f"Rate limit exceeded for {client_ip} on {endpoint}")
+                return jsonify({"error": "Too many requests"}), 429
+            
+            # Record this request
+            rate_limit_store[key].append(now)
+            
+            # Call the actual endpoint
+            return f(*args, **kwargs)
+        return decorated
+    return decorator
 
 # --- Firebase Setup ---
 # SECURITY: Load Firebase service account from environment variable (base64 encoded)
@@ -68,10 +117,12 @@ def get_internal_headers():
     return {}
 
 @app.route('/validate_invite', methods=['POST'])
+@rate_limit(max_requests=5, window_seconds=1)  # 5 requests per second
 def validate_invite():
     """
     Step 1 of Sign-Up: Checks code AND global inventory.
     Called by Frontend BEFORE showing the sign-up form.
+    Rate limited: 5 requests/second to prevent brute-force
     """
     data = request.get_json()
     code = data.get('code')
@@ -200,10 +251,12 @@ def register_user():
         return jsonify({"error": "Registration failed - please try again"}), 500
 
 @app.route('/verify_token', methods=['GET'])
+@rate_limit(max_requests=10, window_seconds=1)  # 10 requests per second
 def verify_token():
     """
     The "Gatekeeper" Endpoint.
     Called by backend/app.py to check if a request is allowed.
+    Rate limited: 10 requests/second
     """
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith("Bearer "):
@@ -229,12 +282,14 @@ def verify_token():
         return jsonify({"valid": False, "error": "Invalid token"}), 401
 
 @app.route('/grant_access', methods=['POST'])
+@rate_limit(max_requests=5, window_seconds=1)  # 5 requests per second
 def grant_access():
     """
     Grant a 'Guest Pass' to another user.
     
     REQUIRES authentication via Firebase ID token.
     The owner_id is derived from the token, not the request body (prevents spoofing).
+    Rate limited: 5 requests/second to prevent abuse
     """
     # 1. AUTHENTICATE: Verify Firebase ID token
     auth_header = request.headers.get('Authorization')
