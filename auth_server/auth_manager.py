@@ -126,10 +126,11 @@ class AuthManager:
             logger.warning(f"Invite code '{code}' already exists")
             return False
 
-    def validate_and_consume_invite(self, code: str) -> dict:
+    def validate_invite(self, code: str) -> dict:
         """
         Check if an invite code is valid and not expired.
-        Does NOT decrement uses yet (that happens on successful user creation).
+        DOES NOT consume the invite - only validates it.
+        The invite is consumed separately via decrement_invite() on successful registration.
         
         Args:
             code: The invite code to validate
@@ -155,6 +156,13 @@ class AuthManager:
                 "role": invite['associated_role'],
                 "type": invite['type']
             }
+
+    def validate_and_consume_invite(self, code: str) -> dict:
+        """
+        Deprecated: Use validate_invite() instead.
+        Kept for backward compatibility.
+        """
+        return self.validate_invite(code)
 
     def decrement_invite(self, code: str) -> bool:
         """

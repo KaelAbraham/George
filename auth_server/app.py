@@ -123,6 +123,13 @@ def validate_invite():
     Step 1 of Sign-Up: Checks code AND global inventory.
     Called by Frontend BEFORE showing the sign-up form.
     Rate limited: 5 requests/second to prevent brute-force
+    
+    IMPORTANT: This endpoint only VALIDATES the invite code.
+    It does NOT consume/decrement the invite. The invite is only consumed
+    during /register_user after billing account is successfully initialized.
+    
+    This prevents users from burning valid invites by refreshing the page
+    or retrying failed signup attempts.
     """
     data = request.get_json()
     code = data.get('code')
@@ -130,8 +137,8 @@ def validate_invite():
     if not code:
         return jsonify({"valid": False, "error": "Code required"}), 400
 
-    # 1. Check Code Validity
-    invite_status = auth_manager.validate_and_consume_invite(code)
+    # 1. Check Code Validity (validation only - no side effects)
+    invite_status = auth_manager.validate_invite(code)
     if not invite_status['valid']:
         return jsonify(invite_status), 403
 
@@ -203,8 +210,8 @@ def register_user():
             # For now, allow but log it
             pass
         
-        # 4. VALIDATE INVITE: Check code is valid and not consumed
-        invite_status = auth_manager.validate_and_consume_invite(invite_code)
+        # 4. VALIDATE INVITE: Check code is valid and not consumed yet
+        invite_status = auth_manager.validate_invite(invite_code)
         if not invite_status.get('valid'):
             error_msg = invite_status.get('error', 'Invalid invite code')
             logger.warning(f"register_user: Invalid invite code '{invite_code}': {error_msg}")
