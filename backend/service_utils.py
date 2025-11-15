@@ -73,6 +73,68 @@ def get_internal_headers():
     return {}
 
 
+# --- FIREBASE AUTHENTICATION DECORATOR ---
+
+def require_firebase_auth(firebase_auth_module=None):
+    """
+    Decorator to extract and verify Firebase ID token from Authorization header.
+    
+    Automatically extracts the user_id from the Firebase token and passes it
+    as a keyword argument to the decorated function. This eliminates duplicate
+    token extraction and verification logic across endpoints.
+    
+    Args:
+        firebase_auth_module: Optional Firebase auth module (e.g., firebase_admin.auth)
+                            If not provided, must be imported by the calling module
+    
+    Usage:
+        from firebase_admin import auth
+        
+        @app.route('/protected_endpoint', methods=['POST'])
+        @require_firebase_auth(auth)
+        def protected_endpoint(user_id):
+            # user_id is automatically extracted and verified
+            return jsonify({"user_id": user_id}), 200
+    
+    Returns:
+        401 Unauthorized if token is missing, invalid, or verification fails
+        Function result otherwise
+    """
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            # 1. Extract token from Authorization header
+            auth_header = request.headers.get('Authorization')
+            if not auth_header or not auth_header.startswith("Bearer "):
+                logger.warning(f"Unauthorized attempt to {request.path}: missing/invalid auth header from {request.remote_addr}")
+                return jsonify({"error": "Unauthorized - missing or invalid token"}), 401
+            
+            try:
+                # 2. Extract token from "Bearer <token>" format
+                token = auth_header.split("Bearer ")[1]
+                
+                # 3. Verify Firebase token
+                if firebase_auth_module is None:
+                    raise ImportError("firebase_admin.auth module not provided to decorator")
+                
+                decoded_token = firebase_auth_module.verify_id_token(token)
+                user_id = decoded_token.get('uid')
+                
+                if not user_id:
+                    logger.warning(f"Firebase token missing UID from {request.remote_addr}")
+                    return jsonify({"error": "Unauthorized - invalid token"}), 401
+                
+                # 4. Call the function with user_id as keyword argument
+                return f(user_id=user_id, *args, **kwargs)
+            
+            except Exception as e:
+                logger.warning(f"Token verification failed for {request.path}: {e}")
+                return jsonify({"error": "Unauthorized - invalid token"}), 401
+        
+        return wrapper
+    return decorator
+
+
 # --- RESILIENT SERVICE CLIENT WITH CIRCUIT BREAKER ---
 
 class ServiceUnavailable(Exception):

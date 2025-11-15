@@ -65,6 +65,56 @@ def rate_limit(max_requests=5, window_seconds=1):
         return decorated
     return decorator
 
+# --- FIREBASE AUTHENTICATION DECORATOR ---
+
+def require_firebase_auth(f):
+    """
+    Decorator to extract and verify Firebase ID token from Authorization header.
+    
+    Automatically extracts the user_id from the Firebase token and passes it
+    as a keyword argument to the decorated function. This eliminates duplicate
+    token extraction and verification logic across endpoints.
+    
+    Usage:
+        @app.route('/protected_endpoint', methods=['POST'])
+        @require_firebase_auth
+        def protected_endpoint(user_id):
+            # user_id is automatically extracted and verified
+            return jsonify({"user_id": user_id})
+    
+    Returns:
+        401 Unauthorized if token is missing, invalid, or verification fails
+        Function result otherwise
+    """
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        # 1. Extract token from Authorization header
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith("Bearer "):
+            logger.warning(f"Unauthorized attempt to {request.path}: missing/invalid auth header from {request.remote_addr}")
+            return jsonify({"error": "Unauthorized - missing or invalid token"}), 401
+        
+        try:
+            # 2. Extract token from "Bearer <token>" format
+            token = auth_header.split("Bearer ")[1]
+            
+            # 3. Verify Firebase token
+            decoded_token = auth.verify_id_token(token)
+            user_id = decoded_token.get('uid')
+            
+            if not user_id:
+                logger.warning(f"Firebase token missing UID from {request.remote_addr}")
+                return jsonify({"error": "Unauthorized - invalid token"}), 401
+            
+            # 4. Call the function with user_id as keyword argument
+            return f(user_id=user_id, *args, **kwargs)
+        
+        except Exception as e:
+            logger.warning(f"Token verification failed for {request.path}: {e}")
+            return jsonify({"error": "Unauthorized - invalid token"}), 401
+    
+    return wrapper
+
 # --- Firebase Setup ---
 # SECURITY: Load Firebase service account from environment variable (base64 encoded)
 # Never commit serviceAccountKey.json to git!
@@ -272,24 +322,16 @@ def register_user():
 
 @app.route('/verify_token', methods=['GET'])
 @rate_limit(max_requests=10, window_seconds=1)  # 10 requests per second
-def verify_token():
+@require_firebase_auth
+def verify_token(user_id):
     """
     The "Gatekeeper" Endpoint.
     Called by backend/app.py to check if a request is allowed.
+    Automatically extracts user_id from Firebase token via decorator.
     Rate limited: 10 requests/second
     """
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return jsonify({"error": "Missing token"}), 401
-
-    token = auth_header.split("Bearer ")[1]
-    
     try:
-        # 1. Verify Firebase Token
-        decoded_token = auth.verify_id_token(token)
-        user_id = decoded_token['uid']
-        
-        # 2. Get Internal Role
+        # Get Internal Role
         role = auth_manager.get_user_role(user_id)
         
         return jsonify({
@@ -298,34 +340,21 @@ def verify_token():
             "role": role
         })
     except Exception as e:
-        logger.warning(f"Token verification failed: {e}")
-        return jsonify({"valid": False, "error": "Invalid token"}), 401
+        logger.error(f"Error retrieving user role for {user_id}: {e}", exc_info=True)
+        return jsonify({"valid": False, "error": "Internal server error"}), 500
 
 @app.route('/grant_access', methods=['POST'])
 @rate_limit(max_requests=5, window_seconds=1)  # 5 requests per second
-def grant_access():
+@require_firebase_auth
+def grant_access(user_id):
     """
     Grant a 'Guest Pass' to another user.
     
-    REQUIRES authentication via Firebase ID token.
+    REQUIRES authentication via Firebase ID token (automatically extracted via decorator).
     The owner_id is derived from the token, not the request body (prevents spoofing).
     Rate limited: 5 requests/second to prevent abuse
     """
-    # 1. AUTHENTICATE: Verify Firebase ID token
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith("Bearer "):
-        logger.warning(f"Unauthorized grant_access attempt: missing/invalid auth header from {request.remote_addr}")
-        return jsonify({"error": "Unauthorized - missing or invalid token"}), 401
-    
-    try:
-        token = auth_header.split("Bearer ")[1]
-        decoded_token = auth.verify_id_token(token)
-        owner_id = decoded_token['uid']  # Derive from token, don't trust request body
-    except Exception as e:
-        logger.warning(f"Token verification failed in grant_access: {e}")
-        return jsonify({"error": "Unauthorized - invalid token"}), 401
-    
-    # 2. VALIDATE INPUT
+    # 1. VALIDATE INPUT
     data = request.get_json()
     target_email = data.get('target_email')
     project_id = data.get('project_id')
@@ -334,7 +363,7 @@ def grant_access():
         return jsonify({"error": "target_email and project_id are required"}), 400
     
     try:
-        # 3. AUTHORIZATION: Verify owner owns this project
+        # 2. AUTHORIZATION: Verify owner owns this project
         # (This depends on your project ownership model - add if needed)
         # For now, we'll assume the auth_manager handles ownership checks
         
@@ -344,7 +373,7 @@ def grant_access():
         
         # Grant access
         auth_manager.grant_project_access(project_id, target_uid)
-        logger.info(f"Access granted by {owner_id} to {target_email} for project {project_id}")
+        logger.info(f"Access granted by {user_id} to {target_email} for project {project_id}")
         
         return jsonify({"message": f"Access granted to {target_email}"})
         
