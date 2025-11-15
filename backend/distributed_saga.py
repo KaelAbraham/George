@@ -353,10 +353,10 @@ class WikiGenerationSaga(DistributedSaga):
             }
             
         except Exception as e:
-            logger.error(f"Wiki generation saga failed: {e}")
+            logger.error(f"Wiki generation saga failed: {e}", exc_info=True)
             # Rollback happens automatically on exception in execute_step
             return {
                 "status": "failed",
-                "error": str(e),
+                "error": "Wiki generation failed",
                 "saga_status": self.get_status()
             }

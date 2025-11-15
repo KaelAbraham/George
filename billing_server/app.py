@@ -101,9 +101,10 @@ def deduct_funds():
             return jsonify({"status": "failed", "message": "Insufficient funds"}), 402
             
     except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        logger.warning(f"Deduct validation error: {e}")
+        return jsonify({"error": "Invalid request"}), 400
     except Exception as e:
-        logger.error(f"Deduct failed: {e}")
+        logger.error(f"Deduct failed: {e}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
 
 @app.route('/top_up', methods=['POST'])

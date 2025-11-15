@@ -39,7 +39,8 @@ def snapshot(project_id):
         commit = repo.index.commit(f"Snapshot for project {project_id}")
         return jsonify({'message': 'Snapshot created successfully', 'commit_hash': commit.hexsha}), 200
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        app.logger.error(f"Failed to create snapshot: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to create snapshot'}), 500
 
 @app.route('/history/<project_id>', methods=['GET'])
 def history(project_id):
@@ -76,7 +77,8 @@ def history(project_id):
     except git.exc.InvalidGitRepositoryError:
         return jsonify({'error': 'Project has no git history'}), 404
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        app.logger.error(f"Failed to get history: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to get history'}), 500
 
 
 @app.route('/checkout/<project_id>/<commit_hash>', methods=['GET'])
@@ -169,7 +171,7 @@ def checkout(project_id, commit_hash):
         return jsonify({'error': 'Project has no git history'}), 404
     except Exception as e:
         app.logger.error(f"Checkout failed: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Checkout failed'}), 500
 
 
 @app.route('/cleanup/<checkout_id>', methods=['DELETE'])
@@ -192,7 +194,8 @@ def cleanup(checkout_id):
         shutil.rmtree(temp_folder)
         return jsonify({'message': f'Cleanup successful for checkout "{checkout_id}"'}), 200
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        app.logger.error(f"Cleanup failed: {e}", exc_info=True)
+        return jsonify({'error': 'Cleanup failed'}), 500
 
 
 @app.route('/get_file/<project_id>/<path:file_path>', methods=['GET'])

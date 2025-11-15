@@ -330,10 +330,10 @@ def grant_access():
         
     except auth.UserNotFoundError:
         logger.warning(f"User not found: {target_email}")
-        return jsonify({"error": f"User not found: {target_email}"}), 404
+        return jsonify({"error": "User not found"}), 404
     except Exception as e:
-        logger.error(f"grant_access error: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"grant_access error: {e}", exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
 
 if __name__ == '__main__':
     import os

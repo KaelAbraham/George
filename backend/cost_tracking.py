@@ -441,5 +441,6 @@ def chat():
     except Exception as e:
         # STEP 4: RELEASE ON FAILURE
         cost_tracker.release_funds(reservation_id)
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Request failed: {e}", exc_info=True)
+        return jsonify({"error": "Request failed"}), 500
 """

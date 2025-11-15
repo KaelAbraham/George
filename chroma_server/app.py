@@ -116,7 +116,8 @@ def add_chunks():
         db_manager.add_texts(collection_name, texts, metadatas, ids)
         return jsonify({'message': f"Added {len(chunks)} chunks to '{collection_name}'"}), 200
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Failed to add chunks: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to add chunks to collection'}), 500
 
 @app.route('/query', methods=['POST'])
 def query():
@@ -136,7 +137,8 @@ def query():
         results = db_manager.query(collection_name, query_texts, n_results, where)
         return jsonify(results), 200
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Failed to query collection: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to query collection'}), 500
 
 # ===== Graph Endpoints =====
 
@@ -163,7 +165,8 @@ def add_node(project_id):
         
         return jsonify({'message': f"Node '{node_id}' added to graph for project '{project_id}'"}), 200
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Failed to add node: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to add node'}), 500
 
 @app.route('/graph/<project_id>/edge', methods=['POST'])
 def add_edge(project_id):
@@ -189,7 +192,8 @@ def add_edge(project_id):
         
         return jsonify({'message': f"Edge from '{node_from}' to '{node_to}' added to graph"}), 200
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Failed to add edge: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to add edge'}), 500
 
 @app.route('/graph/<project_id>', methods=['GET'])
 def get_graph(project_id):

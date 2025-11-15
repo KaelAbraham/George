@@ -197,7 +197,8 @@ def upload_file_with_conversion(project_id):
         try:
             validate_stream_size(file.stream, MAX_FILE_SIZE)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 413  # 413 Payload Too Large
+            logger.warning(f"File size validation failed: {e}")
+            return jsonify({"error": "File too large"}), 413  # 413 Payload Too Large
         
         # Create project directory using user-isolated path
         project_path = get_project_path(project_id)
@@ -261,7 +262,7 @@ def upload_file_with_conversion(project_id):
         
     except Exception as e:
         logger.error(f"Error in /projects/{project_id}/upload: {e}", exc_info=True)
-        return jsonify({"error": f"File upload failed: {str(e)}"}), 500
+        return jsonify({"error": "File upload failed"}), 500
 
 # --- EXISTING: UPLOAD/PROCESSING ENDPOINT (for chroma integration) ---
 
@@ -286,7 +287,8 @@ def upload_file(project_id):
         try:
             validate_stream_size(file.stream, MAX_FILE_SIZE)
         except ValueError as e:
-            return jsonify({"error": str(e)}), 413  # 413 Payload Too Large
+            logger.warning(f"File size validation failed: {e}")
+            return jsonify({"error": "File too large"}), 413  # 413 Payload Too Large
         
         project_path = get_project_path(project_id)
         os.makedirs(project_path, exist_ok=True)
@@ -374,13 +376,14 @@ def upload_file(project_id):
             }), 201
             
         except DocumentParserError as e:
-            return jsonify({'error': str(e)}), 500
+            logger.error(f"Failed to parse document: {e}", exc_info=True)
+            return jsonify({'error': 'Failed to parse document'}), 500
         except requests.exceptions.RequestException as e:
-            app.logger.error(f"Failed to hand off chunks to chroma-core: {e}")
-            return jsonify({"error": f"File processed, but indexing service failed: {e.response.text if e.response else 'No response'}"}), 502
+            app.logger.error(f"Failed to hand off chunks to chroma-core: {e}", exc_info=True)
+            return jsonify({"error": "File processed, but indexing service failed"}), 502
         except Exception as e:
             app.logger.error(f"An unexpected error occurred: {e}", exc_info=True)
-            return jsonify({'error': f"An unexpected error occurred: {e}"}), 500
+            return jsonify({'error': "An unexpected error occurred"}), 500
     else:
         return jsonify({'error': 'File type not allowed. Allowed: txt, md, docx, pdf, odt'}), 400
 
@@ -434,7 +437,7 @@ def preview_url():
 
     except Exception as e:
         app.logger.error(f"[{g.user_id}:{job_id}] Failed during /preview_url: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to preview URL'}), 500
 
 @app.route('/confirm_url_import', methods=['POST'])
 def confirm_url_import():
@@ -516,11 +519,11 @@ def confirm_url_import():
         return jsonify({'message': 'Web page imported successfully', 'chunk_count': len(chunk_dicts)}), 200
 
     except requests.exceptions.RequestException as e:
-            app.logger.error(f"[{job_id}] Failed to hand off chunks to chroma-core: {e}")
-            return jsonify({"error": f"File processed, but indexing service failed: {e.response.text if e.response else 'No response'}"}), 502
+            app.logger.error(f"[{job_id}] Failed to hand off chunks to chroma-core: {e}", exc_info=True)
+            return jsonify({"error": "File processed, but indexing service failed"}), 502
     except Exception as e:
         app.logger.error(f"[{g.user_id}:{job_id}] Failed to confirm import: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to confirm import'}), 500
 
 # --- File Save Endpoint ---
 
@@ -572,7 +575,7 @@ def save_file():
         
     except Exception as e:
         app.logger.error(f"[{g.user_id}:{project_id}] Failed to save file: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Failed to save file'}), 500
 
 # --- Standard File Serving Endpoints ---
 
