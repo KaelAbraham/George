@@ -1,5 +1,5 @@
 """Main application file for the filesystem server."""
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 from werkzeug.utils import secure_filename
 import os
 import logging
@@ -25,6 +25,20 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['PROJECTS_FOLDER'] = PROJECTS_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB (increased for large PDFs)
 
+# --- MIDDLEWARE: Extract user_id from X-User-ID header ---
+@app.before_request
+def extract_user_id():
+    """
+    Extract X-User-ID from request headers and store in g.user_id.
+    This ensures all requests have a user_id for path resolution.
+    """
+    user_id = request.headers.get('X-User-ID')
+    if user_id:
+        g.user_id = user_id
+    else:
+        # Default to 'default' if no user_id provided
+        g.user_id = 'default'
+
 # --- NEW: Define allowed extensions set ---
 ALLOWED_EXTENSIONS = {'txt', 'md', 'docx', 'pdf', 'odt'}
 
@@ -38,6 +52,15 @@ os.makedirs(app.config['PROJECTS_FOLDER'], exist_ok=True)
 # Initialize services
 parser = DocumentParser()
 chunker = TextChunker()
+
+# --- HELPER FUNCTIONS ---
+
+def get_project_path(project_id):
+    """
+    Get the full project path including user_id.
+    Structure: PROJECTS_FOLDER / user_id / project_id
+    """
+    return os.path.join(app.config['PROJECTS_FOLDER'], g.user_id, project_id)
 
 def allowed_file(filename):
     return '.' in filename and \
@@ -82,6 +105,7 @@ def upload_file_with_conversion(project_id):
     """
     [SIMPLE UPLOAD] Handles file upload, saves original, and creates .md conversion.
     Returns file info and conversion status.
+    Uses X-User-ID header for user-isolated storage.
     """
     if 'file' not in request.files:
         return jsonify({"error": "No file provided in request"}), 400
@@ -97,8 +121,8 @@ def upload_file_with_conversion(project_id):
         return jsonify({"error": f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"}), 400
     
     try:
-        # Create project directory if it doesn't exist
-        project_path = os.path.join(app.config['PROJECTS_FOLDER'], project_id)
+        # Create project directory using user-isolated path
+        project_path = get_project_path(project_id)
         os.makedirs(project_path, exist_ok=True)
         
         # Secure the filename
@@ -106,7 +130,7 @@ def upload_file_with_conversion(project_id):
         file_path = os.path.join(project_path, filename)
         
         # Save the original file
-        logger.info(f"[{project_id}] Saving file: {filename}")
+        logger.info(f"[{g.user_id}:{project_id}] Saving file: {filename}")
         file.save(file_path)
         
         result = {
@@ -127,7 +151,7 @@ def upload_file_with_conversion(project_id):
         # Convert docx, pdf, odt to markdown (skip txt and md as they don't need conversion)
         if file_ext in ['.docx', '.pdf', '.odt']:
             result['conversion']['attempted'] = True
-            logger.info(f"[{project_id}] Converting {filename} to markdown")
+            logger.info(f"[{g.user_id}:{project_id}] Converting {filename} to markdown")
             
             markdown_path = convert_to_markdown(file_path)
             if markdown_path:
@@ -135,9 +159,9 @@ def upload_file_with_conversion(project_id):
                 result['conversion']['success'] = True
                 result['conversion']['markdown_file'] = markdown_filename
                 result['conversion']['markdown_path'] = markdown_path
-                logger.info(f"[{project_id}] Conversion successful: {markdown_filename}")
+                logger.info(f"[{g.user_id}:{project_id}] Conversion successful: {markdown_filename}")
             else:
-                logger.warning(f"[{project_id}] Conversion failed for {filename}")
+                logger.warning(f"[{g.user_id}:{project_id}] Conversion failed for {filename}")
         
         return jsonify({
             'message': 'File uploaded successfully',
@@ -156,6 +180,7 @@ def upload_file(project_id):
     """
     Handles file upload, validation, parsing, chunking,
     and forwards chunks to the chroma-core server.
+    Uses X-User-ID header for user-isolated storage.
     """
     if 'manuscript' not in request.files:
         return jsonify({"error": "No manuscript file provided"}), 400
@@ -167,7 +192,7 @@ def upload_file(project_id):
         return jsonify({"error": "Project ID is required"}), 400
 
     if file and allowed_file(file.filename):
-        project_path = os.path.join(app.config['PROJECTS_FOLDER'], project_id)
+        project_path = get_project_path(project_id)
         os.makedirs(project_path, exist_ok=True)
         
         upload_path = os.path.join(project_path, filename)
@@ -259,6 +284,7 @@ def preview_url():
     Fetches a URL, sanitizes it, and saves it to a temp file.
     Returns the preview text for user confirmation.
     Does NOT index it yet.
+    Uses X-User-ID header for user-isolated storage.
     """
     data = request.get_json()
     url = data.get('url')
@@ -270,11 +296,12 @@ def preview_url():
         
     try:
         # 1. Sanitize
-        app.logger.info(f"[{job_id}] Sanitizing URL: {url}")
+        app.logger.info(f"[{g.user_id}:{job_id}] Sanitizing URL: {url}")
         result = WebSanitizer.fetch_and_sanitize(url)
         
-        # 2. Save to _temp folder
-        temp_dir = os.path.join(app.config['PROJECTS_FOLDER'], project_id, '_temp')
+        # 2. Save to _temp folder using user-isolated path
+        project_path = get_project_path(project_id)
+        temp_dir = os.path.join(project_path, '_temp')
         os.makedirs(temp_dir, exist_ok=True)
         
         # We'll name the temp file after the job_id for easy tracking
@@ -285,7 +312,7 @@ def preview_url():
         with open(temp_path, 'w', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False) 
             
-        app.logger.info(f"[{job_id}] Saved sanitized preview to {temp_path}")
+        app.logger.info(f"[{g.user_id}:{job_id}] Saved sanitized preview to {temp_path}")
 
         # 3. Return Preview
         return jsonify({
@@ -297,7 +324,7 @@ def preview_url():
         })
 
     except Exception as e:
-        app.logger.error(f"[{job_id}] Failed during /preview_url: {e}", exc_info=True)
+        app.logger.error(f"[{g.user_id}:{job_id}] Failed during /preview_url: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/confirm_url_import', methods=['POST'])
@@ -306,6 +333,7 @@ def confirm_url_import():
     STEP 2 of Web Import (Called by Backend JobManager after user confirmation)
     Takes a temp_file_id, reads the sanitized data, chunks it,
     and sends it to the chroma_server.
+    Uses X-User-ID header for user-isolated storage.
     """
     data = request.get_json()
     project_id = data.get('project_id')
@@ -315,13 +343,13 @@ def confirm_url_import():
     if not project_id or not temp_file_id or not job_id:
         return jsonify({'error': 'project_id, temp_file_id, and job_id required'}), 400
         
-    temp_path = os.path.join(app.config['PROJECTS_FOLDER'], project_id, '_temp', temp_file_id)
+    temp_path = os.path.join(get_project_path(project_id), '_temp', temp_file_id)
     if not os.path.exists(temp_path):
-        app.logger.error(f"[{job_id}] Confirm failed: temp file not found at {temp_path}")
+        app.logger.error(f"[{g.user_id}:{job_id}] Confirm failed: temp file not found at {temp_path}")
         return jsonify({'error': 'Preview expired or not found'}), 404
         
     try:
-        app.logger.info(f"[{job_id}] Confirming import for {temp_path}")
+        app.logger.info(f"[{g.user_id}:{job_id}] Confirming import for {temp_path}")
         # 1. Read the Temp File
         with open(temp_path, 'r', encoding='utf-8') as f:
             import_data = json.load(f)
@@ -382,15 +410,51 @@ def confirm_url_import():
             app.logger.error(f"[{job_id}] Failed to hand off chunks to chroma-core: {e}")
             return jsonify({"error": f"File processed, but indexing service failed: {e.response.text if e.response else 'No response'}"}), 502
     except Exception as e:
-        app.logger.error(f"[{job_id}] Failed to confirm import: {e}", exc_info=True)
+        app.logger.error(f"[{g.user_id}:{job_id}] Failed to confirm import: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+# --- File Save Endpoint ---
+
+@app.route('/save_file', methods=['POST'])
+def save_file():
+    """
+    Save file content to a project.
+    Used by backend to save generated files (e.g., wiki generation).
+    Uses X-User-ID header for user-isolated storage.
+    """
+    data = request.get_json()
+    project_id = data.get('project_id')
+    file_path = data.get('file_path')  # e.g., "wiki/entities.md"
+    content = data.get('content', '')
+    
+    if not project_id or not file_path:
+        return jsonify({'error': 'project_id and file_path are required'}), 400
+    
+    try:
+        # Get the project path with user_id
+        project_path = get_project_path(project_id)
+        
+        # Build full file path and ensure directory exists
+        full_path = os.path.join(project_path, file_path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        
+        # Write the file
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        app.logger.info(f"[{g.user_id}:{project_id}] Saved file: {file_path}")
+        return jsonify({'message': 'File saved successfully', 'path': full_path}), 200
+        
+    except Exception as e:
+        app.logger.error(f"[{g.user_id}:{project_id}] Failed to save file: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 # --- Standard File Serving Endpoints ---
 
 @app.route('/project/<project_id>/files', methods=['GET'])
 def list_files(project_id):
-    """List all files in a project."""
-    project_path = os.path.join(app.config['PROJECTS_FOLDER'], project_id)
+    """List all files in a project. Uses X-User-ID header for user-isolated storage."""
+    project_path = get_project_path(project_id)
     if not os.path.isdir(project_path):
         return jsonify({'error': 'Project not found'}), 404
     
@@ -399,8 +463,8 @@ def list_files(project_id):
 
 @app.route('/file/<project_id>/<filename>', methods=['GET'])
 def get_file_content(project_id, filename):
-    """Get file content from a project."""
-    project_path = os.path.join(app.config['PROJECTS_FOLDER'], project_id)
+    """Get file content from a project. Uses X-User-ID header for user-isolated storage."""
+    project_path = get_project_path(project_id)
     file_path = os.path.join(project_path, filename)
     
     if not os.path.isfile(file_path):

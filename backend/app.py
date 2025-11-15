@@ -433,10 +433,10 @@ def get_file_content(project_id, file_name):
     # (You can add your project access logic here if needed)
 
     try:
-        # 3. PROXY REQUEST to filesystem_server
-        # We assume the filesystem_server has an endpoint like /projects/<id>/<file>
+        # 3. PROXY REQUEST to filesystem_server with user_id header
         resp = requests.get(
-            f"{FILESYSTEM_SERVER_URL}/projects/{project_id}/{file_name}",
+            f"{FILESYSTEM_SERVER_URL}/file/{project_id}/{file_name}",
+            headers={'X-User-ID': auth_data.get('user_id', '')},
             timeout=10
         )
         resp.raise_for_status()  # Raise error for 404, 500, etc.
@@ -478,13 +478,14 @@ def proxy_file_upload(project_id):
         return jsonify({"error": "No file selected"}), 400
 
     try:
-        # 3. FORWARD THE FILE to filesystem_server
+        # 3. FORWARD THE FILE to filesystem_server with user_id header
         # Stream the file to the internal service
         files = {'file': (file.filename, file.stream, file.content_type)}
         
         resp = requests.post(
             f"{FILESYSTEM_SERVER_URL}/projects/{project_id}/upload",
             files=files,
+            headers={'X-User-ID': auth_data.get('user_id', '')},
             timeout=30
         )
         resp.raise_for_status()
@@ -1036,13 +1037,13 @@ def _run_wiki_generation_task(project_id: str, user_id: str) -> Dict:
         for file_data in generated_files:
             save_payload = {
                 "project_id": project_id,
-                "user_id": user_id,
                 "file_path": f"wiki/{file_data.get('filename', 'unknown.md')}",
                 "content": file_data.get('content', '')
             }
             save_resp = requests.post(
                 f"{FILESYSTEM_SERVER_URL}/save_file",
                 json=save_payload,
+                headers={'X-User-ID': user_id},
                 timeout=10
             )
             if save_resp.status_code == 200:

@@ -174,13 +174,13 @@ class IngestionWorker:
         try:
             payload = {
                 "project_id": project_id,
-                "user_id": user_id,
                 "file_path": note_filename,
                 "content": content
             }
             response = requests.post(
                 f"{FILESYSTEM_SERVER_URL}/save_file",
                 json=payload,
+                headers={'X-User-ID': user_id},
                 timeout=10
             )
             response.raise_for_status()
