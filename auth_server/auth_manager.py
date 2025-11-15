@@ -329,17 +329,32 @@ class AuthManager:
         """
         Grant a user access to a project (guest pass).
         
+        SECURITY: Verifies that user_id is a fully registered user in the database
+        before granting permissions. Prevents granting access to unregistered or
+        deleted users.
+        
         Args:
             project_id: The project ID
-            user_id: The user's Firebase UID
+            user_id: The user's Firebase UID (must be registered in database)
             permission_level: One of 'read', 'comment', 'edit', 'admin'
             granted_by: User ID of the person granting access
             
         Returns:
-            True if successful, False otherwise
+            True if successful, False if user not registered or error occurs
         """
         try:
             with self._get_conn() as conn:
+                # SECURITY: Verify user exists in database before granting access
+                # Prevents granting permissions to unregistered Firebase users
+                exists = conn.execute(
+                    "SELECT 1 FROM users WHERE user_id = ?", (user_id,)
+                ).fetchone()
+                
+                if not exists:
+                    logger.warning(f"Cannot grant access: user {user_id} not registered in database")
+                    return False
+                
+                # User exists, safe to grant access
                 conn.execute(
                     """INSERT OR REPLACE INTO project_permissions 
                        (project_id, user_id, permission_level, granted_by)
@@ -350,7 +365,7 @@ class AuthManager:
             logger.info(f"User {user_id} granted {permission_level} access to project {project_id}")
             return True
         except sqlite3.Error as e:
-            logger.error(f"Error granting project access: {e}")
+            logger.error(f"Error granting project access: {e}", exc_info=True)
             return False
 
     def check_project_access(self, user_id: str, project_id: str) -> dict:
