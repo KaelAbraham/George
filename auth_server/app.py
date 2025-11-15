@@ -309,12 +309,19 @@ def register_user():
                 "error": "Account initialization failed. Please try again or contact support."
             }), 503
         
-        # 7. CREATE USER: Record in local DB (only after billing succeeds)
-        auth_manager.create_user(user_id, email, role=invite_status['role'])
-        logger.info(f"register_user: Created user {user_id} with email {email}")
+        # 7. CREATE USER AND CONSUME INVITE: Atomic transaction (both succeed or both fail)
+        # This ensures no half-created users even if one operation fails
+        reg_result = auth_manager.complete_registration(
+            user_id, 
+            email, 
+            role=invite_status['role'],
+            invite_code=invite_code
+        )
         
-        # 8. CONSUME INVITE: Decrement uses (final step after all checks pass)
-        auth_manager.decrement_invite(invite_code)
+        if not reg_result.get('success'):
+            error_msg = reg_result.get('error', 'Registration failed')
+            logger.warning(f"register_user: Transaction failed for {user_id}: {error_msg}")
+            return jsonify({"error": error_msg}), 500
         
         logger.info(f"register_user: Successfully registered {email} ({user_id})")
         return jsonify({"status": "success", "user_id": user_id}), 201

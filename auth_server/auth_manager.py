@@ -44,6 +44,10 @@ class AuthManager:
         """
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
+        # Enable WAL mode for better concurrency and write performance
+        # WAL (Write-Ahead Logging) allows readers and writers to coexist
+        # without lock contention
+        conn.execute("PRAGMA journal_mode=WAL;")
         return conn
 
     def _init_db(self):
@@ -248,6 +252,59 @@ class AuthManager:
         except sqlite3.IntegrityError as e:
             logger.warning(f"Failed to create user {email}: {e}")
             return False
+
+    def complete_registration(self, user_id: str, email: str, role: str, invite_code: str) -> dict:
+        """
+        Complete user registration in a single atomic transaction.
+        
+        TRANSACTION: Creates user AND consumes invite in one transaction.
+        If either step fails, both are rolled back (no half-created users).
+        
+        Args:
+            user_id: Firebase UID
+            email: User's email address
+            role: Role to assign (from invite)
+            invite_code: Invite code to consume
+            
+        Returns:
+            Dictionary with 'success' (bool) and optional 'error' (str)
+        """
+        try:
+            with self._get_conn() as conn:
+                # Begin transaction (implicit in context manager)
+                try:
+                    # Step 1: Create user
+                    conn.execute(
+                        """INSERT INTO users (user_id, email, role) VALUES (?, ?, ?)""",
+                        (user_id, email, role)
+                    )
+                    
+                    # Step 2: Consume invite
+                    cursor = conn.execute(
+                        """UPDATE invites SET uses_left = uses_left - 1 
+                           WHERE code = ? AND type = 'single_use'""",
+                        (invite_code,)
+                    )
+                    
+                    if cursor.rowcount == 0:
+                        # Rollback both operations if invite not found
+                        conn.rollback()
+                        logger.warning(f"Registration failed: invite code {invite_code} not found")
+                        return {"success": False, "error": "Invite code not found"}
+                    
+                    # Commit both operations together
+                    conn.commit()
+                    logger.info(f"Registration completed atomically: {email} ({user_id}), invite {invite_code} consumed")
+                    return {"success": True}
+                    
+                except sqlite3.IntegrityError as e:
+                    conn.rollback()
+                    logger.warning(f"Registration failed - integrity error: {e}")
+                    return {"success": False, "error": "User or invite constraint violated"}
+                    
+        except sqlite3.Error as e:
+            logger.error(f"Registration transaction failed: {e}", exc_info=True)
+            return {"success": False, "error": "Database error during registration"}
 
     def get_user_role(self, user_id: str) -> str:
         """
