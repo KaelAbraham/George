@@ -3,6 +3,7 @@ from flask import Flask, request, jsonify
 from functools import wraps
 import os
 import logging
+import sys
 from db_manager import ChromaManager, GraphManager
 
 # Configure logging
@@ -14,9 +15,22 @@ INTERNAL_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", None)
 
 app = Flask(__name__)
 
-# Initialize ChromaDB manager and Graph manager
-db_manager = ChromaManager()
-graph_manager = GraphManager()
+# Initialize ChromaDB manager and Graph manager with error handling
+try:
+    db_manager = ChromaManager()
+    logger.info("ChromaDB manager initialized successfully")
+except Exception as e:
+    print(f"FATAL: Could not initialize ChromaDB: {e}", file=sys.stderr)
+    logger.error(f"ChromaDB initialization failed: {e}", exc_info=True)
+    db_manager = None
+
+try:
+    graph_manager = GraphManager()
+    logger.info("Graph manager initialized successfully")
+except Exception as e:
+    print(f"FATAL: Could not initialize GraphManager: {e}", file=sys.stderr)
+    logger.error(f"GraphManager initialization failed: {e}", exc_info=True)
+    graph_manager = None
 
 # --- DECORATOR: Require Internal Service Token ---
 def require_internal_token(f):
@@ -37,8 +51,43 @@ def require_internal_token(f):
         return f(*args, **kwargs)
     return decorated
 
+# --- HEALTH CHECK ENDPOINTS ---
+
+@app.route('/health', methods=['GET'])
+def health():
+    """
+    Simple health check endpoint.
+    Returns 200 if service is running, regardless of backend status.
+    """
+    return jsonify({'status': 'ok', 'service': 'chroma_server'}), 200
+
+@app.route('/ready', methods=['GET'])
+def readiness():
+    """
+    Readiness probe - checks if all dependencies are initialized.
+    Returns 200 if ready, 503 if not.
+    """
+    status = {
+        'ready': True,
+        'db_manager': db_manager is not None and db_manager.client is not None,
+        'graph_manager': graph_manager is not None
+    }
+    
+    if not status['db_manager']:
+        logger.warning("Readiness check failed: db_manager not initialized")
+    if not status['graph_manager']:
+        logger.warning("Readiness check failed: graph_manager not initialized")
+    
+    is_ready = status['db_manager'] and status['graph_manager']
+    status_code = 200 if is_ready else 503
+    
+    return jsonify(status), status_code
+
 @app.route('/create_collection', methods=['POST'])
 def create_collection():
+    if db_manager is None or db_manager.client is None:
+        return jsonify({'error': 'Database service unavailable'}), 503
+    
     data = request.get_json()
     collection_name = data.get('collection_name')
     if not collection_name:
@@ -52,6 +101,9 @@ def create_collection():
 
 @app.route('/add_chunks', methods=['POST'])
 def add_chunks():
+    if db_manager is None or db_manager.client is None:
+        return jsonify({'error': 'Database service unavailable'}), 503
+    
     data = request.get_json()
     collection_name = data.get('collection_name')
     chunks = data.get('chunks')
@@ -70,6 +122,9 @@ def add_chunks():
 
 @app.route('/query', methods=['POST'])
 def query():
+    if db_manager is None or db_manager.client is None:
+        return jsonify({'error': 'Database service unavailable'}), 503
+    
     data = request.get_json()
     collection_name = data.get('collection_name')
     query_texts = data.get('query_texts')
@@ -90,6 +145,9 @@ def query():
 @app.route('/graph/<project_id>/node', methods=['POST'])
 def add_node(project_id):
     """Add a node to the knowledge graph for a project."""
+    if graph_manager is None:
+        return jsonify({'error': 'Graph service unavailable'}), 503
+    
     data = request.get_json()
     node_id = data.get('node_id')
     node_type = data.get('type', 'unknown')
@@ -112,6 +170,9 @@ def add_node(project_id):
 @app.route('/graph/<project_id>/edge', methods=['POST'])
 def add_edge(project_id):
     """Add an edge (relationship) to the knowledge graph for a project."""
+    if graph_manager is None:
+        return jsonify({'error': 'Graph service unavailable'}), 503
+    
     data = request.get_json()
     node_from = data.get('node_from')
     node_to = data.get('node_to')
@@ -135,6 +196,9 @@ def add_edge(project_id):
 @app.route('/graph/<project_id>', methods=['GET'])
 def get_graph(project_id):
     """Get the knowledge graph for a project."""
+    if graph_manager is None:
+        return jsonify({'error': 'Graph service unavailable'}), 503
+    
     try:
         g = graph_manager.get_or_create_graph(project_id)
         
